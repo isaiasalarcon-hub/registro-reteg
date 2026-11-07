@@ -5,6 +5,7 @@ import re
 import uuid
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
+from googleapiclient.errors import HttpError
 from google.oauth2.service_account import Credentials
 from datetime import date, datetime
 from google.auth.exceptions import RefreshError
@@ -159,8 +160,28 @@ def media_section(patient, number):
             if saved:
                 st.session_state[f"upload_notice:{patient}:{number}"] = f"{saved} archivo(s) guardado(s) en Drive."
                 st.rerun()
-        except Exception:
-            st.error("No se ha podido subir a Drive. Comprueba que la cuenta de servicio tiene acceso de escritura a la carpeta RETEG.")
+        except HttpError as exc:
+            status = getattr(exc.resp, "status", None)
+            reason = ""
+            try:
+                import json
+                details = json.loads(exc.content.decode("utf-8"))
+                reason = details.get("error", {}).get("errors", [{}])[0].get("reason", "")
+            except (ValueError, UnicodeDecodeError, IndexError, AttributeError, TypeError):
+                pass
+            if status == 403 and reason in ("storageQuotaExceeded", "quotaExceeded"):
+                st.error("Google Drive ha rechazado la subida por falta de cuota de almacenamiento de la cuenta de servicio. Las cuentas de servicio no disponen de almacenamiento personal. Se necesita una unidad compartida compatible o un método de subida autorizado con la cuenta propietaria.")
+            elif status == 403 and reason in ("insufficientPermissions", "forbidden"):
+                st.error("Google Drive deniega esta operación (403). Comprueba que la API de Drive esté habilitada y que la cuenta de servicio pueda crear archivos en la ubicación.")
+            elif status == 404:
+                st.error("Google Drive no encuentra la carpeta de destino (404). Comprueba su ID y acceso.")
+            else:
+                st.error(f"Google Drive ha rechazado la operación (HTTP {status or 'desconocido'}, motivo: {reason or 'no especificado'}).")
+        except Exception as exc:
+            if isinstance(exc, (KeyError, StreamlitSecretNotFoundError, RefreshError)):
+                st.error("Error de configuración o autenticación de la cuenta de servicio.")
+            else:
+                st.error(f"Error al subir el archivo ({type(exc).__name__}). Revisa los registros de Streamlit para más detalles.")
 
 
 st.set_page_config(page_title="REGISTRO RETEG", layout="wide")
