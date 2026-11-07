@@ -83,7 +83,7 @@ def endoscopy_sheet(create=False):
     return ws
 
 def validate_record(patient_id, surgery, surgery_date, endoscopy_date, digestivo,
-                    place, therapy, review):
+                    place, therapy, review, pending_date=False):
     if not patient_id.strip() or not (surgery or "").strip() or not surgery_date or not endoscopy_date:
         return "Completa el ID, la cirugía y ambas fechas."
     if not digestivo or not place or not therapy:
@@ -91,9 +91,9 @@ def validate_record(patient_id, surgery, surgery_date, endoscopy_date, digestivo
     if endoscopy_date < surgery_date:
         return "La fecha de endoscopia no puede ser anterior a la cirugía."
     if therapy != "FIN TRATAMIENTO":
-        if review is None:
-            return "Indica la fecha estimada del siguiente recambio."
-        if review < endoscopy_date:
+        if review is None and not pending_date:
+            return "Indica la fecha estimada del siguiente recambio o marca PENDIENTE DE FECHA."
+        if review is not None and review < endoscopy_date:
             return "La fecha del siguiente recambio no puede ser anterior a la endoscopia."
     return None
 
@@ -233,7 +233,7 @@ if not show_form:
                 for record in sorted(pending, key=lambda r: str(r.get("Fecha estimada siguiente recambio", ""))):
                     patient_id = str(record.get("ID", "")).strip()
                     therapy = str(record.get("Tratamiento", ""))
-                    review = str(record.get("Fecha estimada siguiente recambio", "")) or "Sin fecha"
+                    review = str(record.get("Fecha estimada siguiente recambio", "")) or "PENDIENTE DE FECHA"
                     number = int(record["N.º endoscopia"]) + 1
                     name = f"{number}ª ENDOSCOPIA"
                     st.button(
@@ -352,11 +352,17 @@ with st.container(border=True):
     therapy = st.selectbox("Tratamiento", THERAPIES, index=None,
                            placeholder="Seleccionar tratamiento", key=field_key + "therapy")
     review = None
+    pending_date = False
     if therapy == "FIN TRATAMIENTO":
         st.info("Fin del tratamiento: no se programa un siguiente recambio.")
     else:
-        review = st.date_input("Fecha estimada siguiente recambio", value=None,
-                               format="DD/MM/YYYY", key=field_key + "review")
+        pending_date = st.checkbox("PENDIENTE DE FECHA", key=field_key + "pending_date",
+                                   help="El tratamiento continúa, pero todavía no hay fecha para la próxima endoscopia.")
+        if not pending_date:
+            review = st.date_input("Fecha estimada siguiente recambio", value=None,
+                                   format="DD/MM/YYYY", key=field_key + "review")
+        else:
+            st.caption("La próxima endoscopia seguirá en PENDIENTES sin fecha asignada.")
 
     observations = st.text_area("OBSERVACIONES", key=field_key + "observations")
     change_therapy = st.radio("CAMBIO DE TERAPIA", ["NO", "SI"], horizontal=True, key=field_key + "change")
@@ -376,7 +382,8 @@ save_clicked = st.button("Guardar endoscopia", type="primary",
                          disabled=endoscopy_number is None)
 if save_clicked or next_clicked:
     error = validate_record(patient_id, surgery, surgery_date, endoscopy_date,
-                            digestivo, place, therapy, review if finished == "NO" else endoscopy_date)
+                            digestivo, place, therapy, review if finished == "NO" else endoscopy_date,
+                            pending_date=pending_date and finished == "NO")
     if error:
         st.error(error)
     else:
@@ -387,7 +394,8 @@ if save_clicked or next_clicked:
                 patient_key, surgery, surgery_date.strftime("%d/%m/%Y"),
                 str(endoscopy_number), endoscopy_date.strftime("%d/%m/%Y"),
                 digestivo, place, therapy,
-                review.strftime("%d/%m/%Y") if review else "", observations, change_therapy, finished
+                review.strftime("%d/%m/%Y") if review else ("PENDIENTE DE FECHA" if pending_date and finished == "NO" else ""),
+                observations, change_therapy, finished
             ]
             matches = [row for row in rows if len(row) > 3
                        and row[0].strip() == patient_key
