@@ -93,6 +93,71 @@ def validate_record(patient_id, surgery, surgery_date, endoscopy_date, digestivo
             return "La fecha del siguiente recambio no puede ser anterior a la endoscopia."
     return None
 
+
+def pending_patient_ids(records):
+    """The highest endoscopy number determines each patient's current status."""
+    latest = {}
+    for record in records:
+        patient = str(record.get("ID", "")).strip()
+        if not patient:
+            continue
+        number = int(record["N.º endoscopia"])
+        if number < 1:
+            raise ValueError("Número de endoscopia no válido en los registros.")
+        if patient not in latest or number > latest[patient][0]:
+            latest[patient] = (number, record)
+    return {
+        patient for patient, (_, record) in latest.items()
+        if str(record.get("Tratamiento", "")).strip().upper() != "FIN TRATAMIENTO"
+    }
+
+def change_section():
+    if st.session_state["section"] == "Nuevo caso":
+        st.session_state.reset_endoscopy_form = True
+
+with st.sidebar:
+    st.header("Menú")
+    section = st.radio(
+        "Ver", ["Pendientes", "Total", "Nuevo caso"],
+        key="section", on_change=change_section,
+    )
+
+if message := st.session_state.pop("endoscopy_notice", None):
+    st.success(message)
+
+if section != "Nuevo caso":
+    st.subheader("Casos pendientes" if section == "Pendientes" else "Todas las endoscopias")
+    try:
+        ws = endoscopy_sheet()
+        data = ws.get_all_records(numericise_ignore=["all"]) if ws else []
+        pending = pending_patient_ids(data)
+        visible = (
+            [record for record in data if str(record.get("ID", "")).strip() in pending]
+            if section == "Pendientes" else data
+        )
+        patient_count = len({str(record.get("ID", "")).strip() for record in visible})
+        st.caption(f"{patient_count} casos · {len(visible)} endoscopias")
+        if visible:
+            st.dataframe(visible, use_container_width=True, hide_index=True)
+        else:
+            st.info("No hay casos pendientes." if section == "Pendientes"
+                    else "Todavía no hay endoscopias registradas.")
+        if section == "Pendientes":
+            st.caption("Casos iniciados cuya última endoscopia no indica FIN TRATAMIENTO.")
+        else:
+            try:
+                previous = spreadsheet().worksheet("REGISTRO INICIAL").get_all_records(numericise_ignore=["all"])
+            except gspread.WorksheetNotFound:
+                previous = []
+            if previous:
+                with st.expander("Registros iniciales anteriores"):
+                    st.dataframe(previous, use_container_width=True, hide_index=True)
+    except Exception as exc:
+        st.error(connection_error(exc))
+    st.divider()
+else:
+    st.subheader("Nuevo caso")
+
 # Clear widget state before creating widgets on the run after a successful save.
 if st.session_state.pop("reset_endoscopy_form", False):
     for key in list(st.session_state):
@@ -139,8 +204,6 @@ if patient_key and st.session_state.get("current_endoscopy") is None:
 
 endoscopy_number = st.session_state.get("current_endoscopy")
 field_key = f"endo:{patient_key}:{endoscopy_number}:"
-if message := st.session_state.pop("endoscopy_notice", None):
-    st.success(message)
 
 with st.container(border=True):
     st.subheader("Endoscopia actual")
@@ -224,21 +287,3 @@ if save_clicked or next_clicked:
         except Exception:
             st.error("No se ha podido confirmar el guardado. Se conserva la endoscopia actual; comprueba la conexión antes de reintentar.")
 
-st.divider()
-st.subheader("Endoscopias registradas")
-try:
-    ws = endoscopy_sheet()
-    data = ws.get_all_records(numericise_ignore=["all"]) if ws else []
-    if data:
-        st.dataframe(data, use_container_width=True, hide_index=True)
-    else:
-        st.info("Todavía no hay endoscopias registradas.")
-    try:
-        previous = spreadsheet().worksheet("REGISTRO INICIAL").get_all_records(numericise_ignore=["all"])
-    except gspread.WorksheetNotFound:
-        previous = []
-    if previous:
-        with st.expander("Registros iniciales anteriores"):
-            st.dataframe(previous, use_container_width=True, hide_index=True)
-except Exception as exc:
-    st.error(connection_error(exc))
