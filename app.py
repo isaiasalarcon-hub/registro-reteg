@@ -408,8 +408,9 @@ with st.container(border=True):
     st.subheader("ENDOSCOPIA INICIAL" if endoscopy_number == 1 else f"{endoscopy_number}ª ENDOSCOPIA" if endoscopy_number else "Endoscopia actual")
     c1, c2 = st.columns(2)
     with c1:
-        st.metric("N.º de endoscopia", endoscopy_number if endoscopy_number else "—")
-        st.caption("Numeración automática por paciente.")
+        if endoscopy_number != 1:
+            st.metric("N.º de endoscopia", endoscopy_number if endoscopy_number else "—")
+            st.caption("Numeración automática por paciente.")
     with c2:
         endoscopy_date = st.date_input("Fecha de endoscopia", value=None,
                                       max_value=date.today(), format="DD/MM/YYYY", key=field_key + "date")
