@@ -608,8 +608,10 @@ with st.container(border=True):
     if finished == "SI":
         review = None
 
-    if endoscopy_number and endoscopy_number > 1:
-        st.caption("Las fotos y vídeos de esta endoscopia se podrán subir tras guardarla, desde TOTAL.")
+    if patient_key and endoscopy_number:
+        media_section(patient_key, endoscopy_number)
+    else:
+        st.caption("Introduce primero el ID del paciente para adjuntar fotos o vídeos.")
 
     next_clicked = st.button(
         "Siguiente endoscopia",
