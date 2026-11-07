@@ -72,14 +72,17 @@ def endoscopy_sheet(create=False):
             return None
         ws = book.add_worksheet(title="ENDOSCOPIAS", rows=1000, cols=len(HEADERS))
     headers = ws.row_values(1)
-    if not headers and create:
-        ws.append_row(HEADERS, value_input_option="RAW")
-    elif headers and headers != HEADERS:
-        if headers == HEADERS[:9]:
-            if create:
-                ws.update(range_name="J1:L1", values=[HEADERS[9:]])
-        else:
-            raise ValueError("La estructura de ENDOSCOPIAS no coincide con el formulario.")
+    if headers and headers not in (HEADERS, HEADERS[:9]):
+        raise ValueError("La estructura de ENDOSCOPIAS no coincide con el formulario.")
+    if create:
+        # Older worksheets were created with nine columns. Expand first, then
+        # migrate headers without touching existing patient rows.
+        if ws.col_count < len(HEADERS):
+            ws.add_cols(len(HEADERS) - ws.col_count)
+        if not headers:
+            ws.update(range_name="A1:L1", values=[HEADERS])
+        elif headers == HEADERS[:9]:
+            ws.update(range_name="J1:L1", values=[HEADERS[9:]])
     return ws
 
 def validate_record(patient_id, surgery, surgery_date, endoscopy_date, digestivo,
