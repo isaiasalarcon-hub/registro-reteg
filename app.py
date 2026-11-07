@@ -4,7 +4,7 @@ import io
 import re
 import uuid
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
+from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 from google.oauth2.service_account import Credentials
 from datetime import date, datetime
 from google.auth.exceptions import RefreshError
@@ -55,6 +55,20 @@ def find_or_create_folder(service, parent, name):
     return created["id"]
 
 
+@st.cache_data(ttl=300, show_spinner=False, max_entries=24)
+def drive_file_bytes(file_id):
+    service = drive_service()
+    stream = io.BytesIO()
+    request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
+    downloader = MediaIoBaseDownload(stream, request, chunksize=1024 * 1024)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+        if stream.tell() > 150 * 1024 * 1024:
+            raise ValueError("Archivo demasiado grande para visualizar.")
+    return stream.getvalue()
+
+
 def media_section(patient, number):
     st.markdown("**FOTOS Y VÍDEOS**")
     if not st.secrets.get("reteg_media_enabled", True):
@@ -67,11 +81,37 @@ def media_section(patient, number):
             if str(row.get("ID", "")).strip() == str(patient)
             and str(row.get("N.º endoscopia", "")).strip() == str(number)
         ]
+        if existing:
+            st.caption(f"Archivos de esta endoscopia: {len(existing)}")
         for row in existing:
             file_id = str(row.get("Drive ID", "")).strip()
-            if file_id:
+            if not file_id:
+                continue
+            filename = str(row.get("Archivo", "Adjunto"))
+            mime = str(row.get("Tipo", "")).lower()
+            ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+            is_video = mime.startswith("video/") or ext in {"mp4", "mov", "m4v", "webm"}
+            is_image = mime.startswith("image/") or ext in {"jpg", "jpeg", "png", "webp", "heic"}
+            with st.container(border=True):
+                st.caption(filename)
+                # Videos load on demand to avoid downloading large files on every rerun.
+                show = True
+                if is_video:
+                    show = st.toggle("Reproducir vídeo", key=f"play:{patient}:{number}:{file_id}")
+                if show and (is_image or is_video):
+                    try:
+                        with st.spinner("Cargando archivo desde Drive..."):
+                            data = drive_file_bytes(file_id)
+                        if is_video:
+                            st.video(data, format=mime if mime.startswith("video/") else "video/mp4")
+                        elif ext == "heic":
+                            st.info("Este formato de imagen puede no ser compatible con el visor.")
+                        else:
+                            st.image(data, caption=filename, use_container_width=True)
+                    except Exception:
+                        st.warning("No se ha podido mostrar este archivo. Comprueba los permisos de Drive.")
                 st.link_button(
-                    f"Ver archivo: {row.get('Archivo', 'Adjunto')}",
+                    "Abrir archivo en Drive",
                     f"https://drive.google.com/file/d/{file_id}/view",
                 )
     except Exception:
