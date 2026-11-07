@@ -80,7 +80,7 @@ def endoscopy_sheet(create=False):
 
 def validate_record(patient_id, surgery, surgery_date, endoscopy_date, digestivo,
                     place, therapy, review):
-    if not patient_id.strip() or not surgery.strip() or not surgery_date or not endoscopy_date:
+    if not patient_id.strip() or not (surgery or "").strip() or not surgery_date or not endoscopy_date:
         return "Completa el ID, la cirugía y ambas fechas."
     if not digestivo or not place or not therapy:
         return "Selecciona digestivo, lugar y tratamiento."
@@ -93,18 +93,25 @@ def validate_record(patient_id, surgery, surgery_date, endoscopy_date, digestivo
             return "La fecha del siguiente recambio no puede ser anterior a la endoscopia."
     return None
 
+# Clear widget state before creating widgets on the run after a successful save.
+if st.session_state.pop("reset_endoscopy_form", False):
+    for key in list(st.session_state):
+        if key.startswith(("patient:", "endo:")) or key in ("active_patient", "current_endoscopy"):
+            del st.session_state[key]
+
 with st.container(border=True):
     st.subheader("Paciente y cirugía")
     c1, c2, c3 = st.columns([1, 2, 1])
     with c1:
-        patient_id = st.text_input("ID")
+        patient_id = st.text_input("ID", key="patient:id")
     with c2:
-        surgery = st.selectbox("Cirugía", SURGERIES)
+        surgery = st.selectbox("Cirugía", SURGERIES, index=None,
+                               placeholder="Seleccionar cirugía", key="patient:surgery")
         if surgery == "Otra":
-            surgery = st.text_input("Especificar cirugía")
+            surgery = st.text_input("Especificar cirugía", key="patient:other_surgery")
     with c3:
         surgery_date = st.date_input("Fecha cirugía", value=None,
-                                    max_value=date.today(), format="DD/MM/YYYY")
+                                    max_value=date.today(), format="DD/MM/YYYY", key="patient:surgery_date")
 
 def next_endoscopy_number(rows, patient_id):
     numbers = []
@@ -206,7 +213,12 @@ if save_clicked or next_clicked:
                     )
                     st.rerun()
                 else:
-                    st.success("Endoscopia guardada en Google Sheets.")
+                    st.session_state.reset_endoscopy_form = True
+                    st.session_state.endoscopy_notice = (
+                        f"Endoscopia {endoscopy_number} guardada en Google Sheets. "
+                        "Formulario listo para un nuevo registro."
+                    )
+                    st.rerun()
         except ValueError as exc:
             st.error(str(exc))
         except Exception:
