@@ -44,7 +44,7 @@ def find_or_create_folder(service, parent, name):
         f"'{parent}' in parents and name = '{safe_name}' and "
         "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
     )
-    found = service.files().list(q=query, fields="files(id,name)", page_size=10,
+    found = service.files().list(q=query, fields="files(id,name)", pageSize=10,
                                  supportsAllDrives=True, includeItemsFromAllDrives=True).execute()
     if found.get("files"):
         return found["files"][0]["id"]
