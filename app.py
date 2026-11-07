@@ -120,11 +120,21 @@ def show_history(records, patient_id):
         st.write(f"**ID:** {patient_id}")
         st.write(f"**Cirugía:** {first.get('Cirugía', '')}")
         st.write(f"**Fecha cirugía:** {first.get('Fecha cirugía', '')}")
-    tabs = st.tabs([f"Endoscopia {r['N.º endoscopia']}" for r in history])
-    for tab, record in zip(tabs, history):
-        with tab:
-            for field in HEADERS[4:]:
-                st.write(f"**{field}:** {record.get(field, '') or '—'}")
+    options = list(range(len(history)))
+    chosen = st.selectbox(
+        "Seleccionar endoscopia",
+        options,
+        format_func=lambda i: (
+            f"Endoscopia {history[i]['N.º endoscopia']} · "
+            f"{history[i].get('Fecha endoscopia', '')} · "
+            f"{history[i].get('Tratamiento', '')}"
+        ),
+        key=f"history:{patient_id}",
+    )
+    record = history[chosen]
+    with st.container(border=True):
+        for field in HEADERS[4:]:
+            st.write(f"**{field}:** {record.get(field, '') or '—'}")
 
 
 def latest_patient_records(records):
@@ -208,12 +218,8 @@ if not show_form:
         ws = endoscopy_sheet()
         data = ws.get_all_records(numericise_ignore=["all"]) if ws else []
         latest = latest_patient_records(data)
-        visible = (
-            sorted(data, key=lambda r: (str(r.get("ID", "")), int(r.get("N.º endoscopia", 0))))
-            if section == "Total"
-            else [r for r in latest if not is_finished(r)]
-        )
-        st.caption(f"{len(visible)} endoscopias" if section == "Total" else f"{len(visible)} casos pendientes")
+        visible = latest if section == "Total" else [r for r in latest if not is_finished(r)]
+        st.caption(f"{len(visible)} pacientes" if section == "Total" else f"{len(visible)} casos pendientes")
         if visible:
             summary = [
                 {
