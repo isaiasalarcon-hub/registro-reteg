@@ -161,6 +161,7 @@ def select_case(table_key, records):
     selected = st.session_state.get(table_key, {}).get("selection", {}).get("rows", [])
     if selected and 0 <= selected[0] < len(records):
         st.session_state["open_case"] = dict(records[selected[0]])
+        st.session_state["case_source"] = "Total"
 
 def load_case(record):
     # Validate before changing any form state.
@@ -180,6 +181,7 @@ def load_case(record):
 
 def back_to_list():
     st.session_state["case_page"] = False
+    st.session_state.pop("case_source", None)
     st.session_state["section"] = st.session_state.get("last_list_section", "Pendientes")
     st.session_state["reset_endoscopy_form"] = True
     st.session_state.pop("open_case", None)
@@ -211,38 +213,62 @@ if message := st.session_state.pop("endoscopy_notice", None):
 
 show_form = section == "Nuevo caso" or st.session_state.get("case_page", False)
 
+def open_patient(record, source):
+    st.session_state["open_case"] = dict(record)
+    st.session_state["case_source"] = source
+
+
 if not show_form:
     st.session_state["last_list_section"] = section
-    st.subheader("Casos pendientes" if section == "Pendientes" else "Todos los casos")
     try:
         ws = endoscopy_sheet()
         data = ws.get_all_records(numericise_ignore=["all"]) if ws else []
         latest = latest_patient_records(data)
-        visible = latest if section == "Total" else [r for r in latest if not is_finished(r)]
-        st.caption(f"{len(visible)} pacientes" if section == "Total" else f"{len(visible)} casos pendientes")
-        if visible:
+        pending = [r for r in latest if not is_finished(r)]
+
+        if section == "Pendientes":
+            st.subheader("PENDIENTES")
+            st.caption(f"{len(pending)} pacientes pendientes · Pulsa cualquier tarjeta para abrir la siguiente endoscopia")
+            if pending:
+                for record in sorted(pending, key=lambda r: str(r.get("Fecha estimada siguiente recambio", ""))):
+                    patient_id = str(record.get("ID", "")).strip()
+                    therapy = str(record.get("Tratamiento", ""))
+                    review = str(record.get("Fecha estimada siguiente recambio", "")) or "Sin fecha"
+                    number = int(record["N.º endoscopia"]) + 1
+                    name = f"{number}ª ENDOSCOPIA"
+                    st.button(
+                        f"ID {patient_id}  |  {name}  |  {therapy}  |  Próxima: {review}",
+                        key=f"pending:{patient_id}",
+                        use_container_width=True,
+                        on_click=open_patient,
+                        args=(record, "Pendientes"),
+                    )
+            else:
+                st.info("No hay casos pendientes.")
+            st.divider()
+
+        st.subheader("TOTAL")
+        st.caption(f"{len(latest)} pacientes registrados · Un registro por paciente")
+        if latest:
             summary = [
                 {
                     "ID": str(record["ID"]).strip(),
-                    **({"N.º endoscopia": record.get("N.º endoscopia", ""),
-                        "Fecha endoscopia": record.get("Fecha endoscopia", "")} if section == "Total" else {}),
+                    "Última endoscopia": record.get("N.º endoscopia", ""),
                     "Tratamiento": record.get("Tratamiento", ""),
                     "Fecha siguiente revisión": record.get("Fecha estimada siguiente recambio", ""),
+                    "Estado": "Finalizado" if is_finished(record) else "Pendiente",
                 }
-                for record in visible
+                for record in latest
             ]
-            table_key = f"cases:{section}:{st.session_state.get('table_version', 0)}"
+            table_key = f"cases:total:{st.session_state.get('table_version', 0)}"
             st.dataframe(
                 summary, use_container_width=True, hide_index=True,
                 key=table_key, selection_mode="single-row",
-                on_select=lambda key=table_key, records=visible: select_case(key, records),
+                on_select=lambda key=table_key, records=latest: select_case(key, records),
             )
-            st.caption("Selecciona una fila para consultar la historia completa del paciente.")
+            st.caption("Selecciona un paciente para consultar todas sus endoscopias en el desplegable.")
         else:
-            st.info("No hay casos pendientes." if section == "Pendientes"
-                    else "Todavía no hay endoscopias registradas.")
-        if section == "Pendientes":
-            st.caption("Casos iniciados sin fin de tratamiento registrado.")
+            st.info("Todavía no hay pacientes registrados.")
     except Exception as exc:
         st.error(connection_error(exc))
     st.stop()
@@ -253,7 +279,7 @@ if section == "Nuevo caso" or not st.session_state.get("patient:id"):
 else:
     st.subheader(f"Paciente {st.session_state['patient:id']} · Historia endoscópica")
 
-if st.session_state.get("case_page") and section == "Total":
+if st.session_state.get("case_page") and st.session_state.get("case_source") == "Total":
     try:
         history_ws = endoscopy_sheet()
         show_history(history_ws.get_all_records(numericise_ignore=["all"]) if history_ws else [],
