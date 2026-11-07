@@ -373,7 +373,7 @@ st.button("← Volver al listado", on_click=back_to_list)
 if section == "Nuevo caso" or not st.session_state.get("patient:id"):
     st.subheader("Nuevo caso")
 else:
-    st.subheader(f"Paciente {st.session_state['patient:id']} · Historia endoscópica")
+    st.title(f"ID {st.session_state['patient:id']}")
 
 if st.session_state.get("case_page") and st.session_state.get("case_source") == "Total":
     try:
@@ -383,19 +383,26 @@ if st.session_state.get("case_page") and st.session_state.get("case_source") == 
     except Exception as exc:
         st.error(connection_error(exc))
 
-with st.container(border=True):
-    st.markdown("**PACIENTE**")
-    c1, c2, c3 = st.columns([1, 2, 1], gap="small")
-    with c1:
-        patient_id = st.text_input("ID", key="patient:id")
-    with c2:
-        surgery = st.selectbox("Cirugía", SURGERIES, index=None,
-                               placeholder="Seleccionar cirugía", key="patient:surgery")
-        if surgery == "Otra":
-            surgery = st.text_input("Especificar cirugía", key="patient:other_surgery")
-    with c3:
-        surgery_date = st.date_input("Fecha cirugía", value=None,
-                                    max_value=date.today(), format="DD/MM/YYYY", key="patient:surgery_date")
+if section == "Nuevo caso" and not st.session_state.get("case_page"):
+    with st.container(border=True):
+        st.markdown("**PACIENTE**")
+        c1, c2, c3 = st.columns([1, 2, 1], gap="small")
+        with c1:
+            patient_id = st.text_input("ID", key="patient:id")
+        with c2:
+            surgery = st.selectbox("Cirugía", SURGERIES, index=None,
+                                   placeholder="Seleccionar cirugía", key="patient:surgery")
+            if surgery == "Otra":
+                surgery = st.text_input("Especificar cirugía", key="patient:other_surgery")
+        with c3:
+            surgery_date = st.date_input("Fecha cirugía", value=None,
+                                        max_value=date.today(), format="DD/MM/YYYY", key="patient:surgery_date")
+else:
+    patient_id = st.session_state.get("patient:id", "")
+    surgery = st.session_state.get("patient:surgery", "")
+    if surgery == "Otra":
+        surgery = st.session_state.get("patient:other_surgery", "")
+    surgery_date = st.session_state.get("patient:surgery_date")
 
 def next_endoscopy_number(rows, patient_id):
     numbers = []
@@ -422,6 +429,23 @@ if patient_key and st.session_state.get("current_endoscopy") is None:
         st.button("Reintentar conexión", on_click=retry_connection)
 
 endoscopy_number = st.session_state.get("current_endoscopy")
+if st.session_state.get("case_page") and endoscopy_number and endoscopy_number > 1:
+    try:
+        previous_ws = endoscopy_sheet()
+        previous_records = previous_ws.get_all_records(numericise_ignore=["all"]) if previous_ws else []
+        previous = next(
+            (r for r in previous_records
+             if str(r.get("ID", "")).strip() == patient_key
+             and str(r.get("N.º endoscopia", "")).strip() == str(endoscopy_number - 1)),
+            None,
+        )
+        if previous:
+            st.info(
+                f"ENDOSCOPIA PREVIA · {previous.get('Fecha endoscopia', 'Sin fecha')} "
+                f"· Tratamiento colocado: {previous.get('Tratamiento', 'No consta')}"
+            )
+    except Exception as exc:
+        st.warning(connection_error(exc))
 field_key = f"endo:{patient_key}:{endoscopy_number}:"
 
 with st.container(border=True):
