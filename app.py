@@ -66,37 +66,74 @@ with st.container(border=True):
         surgery_date = st.date_input("Fecha cirugía", value=None,
                                     max_value=date.today(), format="DD/MM/YYYY")
 
+def next_endoscopy_number(rows, patient_id):
+    numbers = []
+    for row in rows:
+        if len(row) > 3 and row[0].strip() == patient_id.strip():
+            number = int(row[3])
+            if number < 1:
+                raise ValueError("Número de endoscopia no válido en los registros.")
+            numbers.append(number)
+    return max(numbers, default=0) + 1
+
+patient_key = patient_id.strip()
+if st.session_state.get("active_patient") != patient_key:
+    st.session_state.active_patient = patient_key
+    st.session_state.current_endoscopy = None
+
+if patient_key and st.session_state.get("current_endoscopy") is None:
+    try:
+        ws = endoscopy_sheet()
+        rows = ws.get_all_values()[1:] if ws else []
+        st.session_state.current_endoscopy = next_endoscopy_number(rows, patient_key)
+    except Exception:
+        st.warning("No se puede calcular el número de endoscopia hasta conectar con Google Sheets.")
+        st.button("Reintentar conexión")
+
+endoscopy_number = st.session_state.get("current_endoscopy")
+field_key = f"endo:{patient_key}:{endoscopy_number}:"
+if message := st.session_state.pop("endoscopy_notice", None):
+    st.success(message)
+
 with st.container(border=True):
     st.subheader("Endoscopia actual")
     c1, c2 = st.columns(2)
     with c1:
-        endoscopy_number = st.number_input("N.º de endoscopia", min_value=1, step=1,
-                                          help="1 para la primera endoscopia; 2, 3… para las siguientes.")
+        st.metric("N.º de endoscopia", endoscopy_number if endoscopy_number else "—")
+        st.caption("Numeración automática por paciente.")
     with c2:
         endoscopy_date = st.date_input("Fecha de endoscopia", value=None,
-                                      max_value=date.today(), format="DD/MM/YYYY")
+                                      max_value=date.today(), format="DD/MM/YYYY", key=field_key + "date")
     c1, c2 = st.columns(2)
     with c1:
         digestivo = st.selectbox("Digestivo", DIGESTIVOS, index=None,
-                                placeholder="Seleccionar digestivo")
+                                placeholder="Seleccionar digestivo", key=field_key + "digestivo")
         if digestivo == "OTRO":
-            other_digestivo = st.text_input("Especificar otro digestivo")
+            other_digestivo = st.text_input("Especificar otro digestivo", key=field_key + "other_digestivo")
             digestivo = "OTRO: " + other_digestivo.strip() if other_digestivo.strip() else None
     with c2:
-        place = st.selectbox("Lugar", PLACES, index=None, placeholder="Seleccionar lugar")
+        place = st.selectbox("Lugar", PLACES, index=None, placeholder="Seleccionar lugar", key=field_key + "place")
         if place == "OTRO":
-            other_place = st.text_input("Especificar otro lugar")
+            other_place = st.text_input("Especificar otro lugar", key=field_key + "other_place")
             place = "OTRO: " + other_place.strip() if other_place.strip() else None
     therapy = st.selectbox("Tratamiento", THERAPIES, index=None,
-                           placeholder="Seleccionar tratamiento")
+                           placeholder="Seleccionar tratamiento", key=field_key + "therapy")
     review = None
     if therapy == "FIN TRATAMIENTO":
         st.info("Fin del tratamiento: no se programa un siguiente recambio.")
     else:
         review = st.date_input("Fecha estimada siguiente recambio", value=None,
-                               format="DD/MM/YYYY")
+                               format="DD/MM/YYYY", key=field_key + "review")
 
-if st.button("Guardar endoscopia", type="primary"):
+    next_clicked = st.button(
+        "Siguiente endoscopia",
+        disabled=endoscopy_number is None or therapy == "FIN TRATAMIENTO",
+        help="Guarda la endoscopia actual y abre la siguiente conservando los datos del paciente.",
+    )
+
+save_clicked = st.button("Guardar endoscopia", type="primary",
+                         disabled=endoscopy_number is None)
+if save_clicked or next_clicked:
     error = validate_record(patient_id, surgery, surgery_date, endoscopy_date,
                             digestivo, place, therapy, review)
     if error:
@@ -105,22 +142,35 @@ if st.button("Guardar endoscopia", type="primary"):
         try:
             ws = endoscopy_sheet(create=True)
             rows = ws.get_all_values()[1:]
-            duplicate = any(len(row) > 3 and row[0].strip() == patient_id.strip()
-                            and row[3] == str(int(endoscopy_number)) for row in rows)
-            if duplicate:
-                st.error("Este ID ya tiene guardado ese número de endoscopia. No se ha duplicado.")
+            record = [
+                patient_key, surgery, surgery_date.strftime("%d/%m/%Y"),
+                str(endoscopy_number), endoscopy_date.strftime("%d/%m/%Y"),
+                digestivo, place, therapy,
+                review.strftime("%d/%m/%Y") if review else ""
+            ]
+            matches = [row for row in rows if len(row) > 3
+                       and row[0].strip() == patient_key
+                       and row[3] == str(endoscopy_number)]
+            # A previously saved identical record can advance without being duplicated.
+            if matches and (len(matches) != 1 or
+                            (matches[0] + [""] * len(HEADERS))[:len(HEADERS)] != record):
+                st.error("Esta endoscopia ya existe con otros datos. No se ha sobrescrito ni se ha avanzado.")
             else:
-                ws.append_row([
-                    patient_id.strip(), surgery, surgery_date.strftime("%d/%m/%Y"),
-                    int(endoscopy_number), endoscopy_date.strftime("%d/%m/%Y"),
-                    digestivo, place, therapy,
-                    review.strftime("%d/%m/%Y") if review else ""
-                ], value_input_option="RAW")
-                st.success("Endoscopia guardada en Google Sheets.")
+                if not matches:
+                    ws.append_row(record, value_input_option="RAW")
+                if next_clicked:
+                    updated_rows = ws.get_all_values()[1:]
+                    st.session_state.current_endoscopy = next_endoscopy_number(updated_rows, patient_key)
+                    st.session_state.endoscopy_notice = (
+                        f"Endoscopia {endoscopy_number} guardada. Puedes rellenar la siguiente."
+                    )
+                    st.rerun()
+                else:
+                    st.success("Endoscopia guardada en Google Sheets.")
         except ValueError as exc:
             st.error(str(exc))
         except Exception:
-            st.error("No se ha podido confirmar el guardado. Comprueba la conexión y la tabla antes de reintentar.")
+            st.error("No se ha podido confirmar el guardado. Se conserva la endoscopia actual; comprueba la conexión antes de reintentar.")
 
 st.divider()
 st.subheader("Endoscopias registradas")
