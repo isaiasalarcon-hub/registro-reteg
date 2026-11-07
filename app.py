@@ -384,8 +384,8 @@ if st.session_state.get("case_page") and st.session_state.get("case_source") == 
         st.error(connection_error(exc))
 
 with st.container(border=True):
-    st.subheader("Paciente y cirugía")
-    c1, c2, c3 = st.columns([1, 2, 1])
+    st.markdown("**PACIENTE**")
+    c1, c2, c3 = st.columns([1, 2, 1], gap="small")
     with c1:
         patient_id = st.text_input("ID", key="patient:id")
     with c2:
