@@ -216,6 +216,14 @@ if message := st.session_state.pop("endoscopy_notice", None):
 
 show_form = section == "Nuevo caso" or st.session_state.get("case_page", False)
 
+def go_to_new_patient():
+    # Callbacks run before Streamlit instantiates the sidebar radio.
+    st.session_state["section"] = "Nuevo caso"
+    st.session_state["case_page"] = False
+    st.session_state["reset_endoscopy_form"] = True
+    st.session_state.pop("date_edit_record", None)
+
+
 def open_date_editor(record):
     st.session_state["date_edit_record"] = dict(record)
 
@@ -326,11 +334,13 @@ if not show_form:
                 st.info("No hay casos pendientes.")
             st.divider()
 
-        if st.button("➕ NUEVO PACIENTE", type="primary", use_container_width=True, key="home_new_patient"):
-            st.session_state["section"] = "Nuevo caso"
-            st.session_state["case_page"] = False
-            st.session_state["reset_endoscopy_form"] = True
-            st.rerun()
+        st.button(
+            "➕ NUEVO PACIENTE",
+            type="primary",
+            use_container_width=True,
+            key="home_new_patient",
+            on_click=go_to_new_patient,
+        )
         st.divider()
 
         st.subheader("TOTAL")
