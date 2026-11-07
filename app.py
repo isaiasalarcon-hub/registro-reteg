@@ -57,7 +57,7 @@ def find_or_create_folder(service, parent, name):
 
 def media_section(patient, number):
     st.markdown("**FOTOS Y VÍDEOS**")
-    if not st.secrets.get("reteg_media_enabled", False):
+    if not st.secrets.get("reteg_media_enabled", True):
         st.info("Subida de archivos pendiente de habilitar: requiere permisos de Drive y acceso restringido a la aplicación.")
         return
     try:
