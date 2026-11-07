@@ -1,7 +1,7 @@
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
-from datetime import date
+from datetime import date, datetime
 from google.auth.exceptions import RefreshError
 from streamlit.errors import StreamlitSecretNotFoundError
 
@@ -94,7 +94,7 @@ def validate_record(patient_id, surgery, surgery_date, endoscopy_date, digestivo
     return None
 
 
-def pending_patient_ids(records):
+def latest_patient_records(records):
     """The highest endoscopy number determines each patient's current status."""
     latest = {}
     for record in records:
@@ -106,14 +106,47 @@ def pending_patient_ids(records):
             raise ValueError("Número de endoscopia no válido en los registros.")
         if patient not in latest or number > latest[patient][0]:
             latest[patient] = (number, record)
-    return {
-        patient for patient, (_, record) in latest.items()
-        if str(record.get("Tratamiento", "")).strip().upper() != "FIN TRATAMIENTO"
-    }
+    return [record for _, record in latest.values()]
+
+def clear_form():
+    for key in list(st.session_state):
+        if key.startswith(("patient:", "endo:")) or key in ("active_patient", "current_endoscopy"):
+            del st.session_state[key]
+    st.session_state["table_version"] = st.session_state.get("table_version", 0) + 1
+
+def select_case(table_key, records):
+    selected = st.session_state.get(table_key, {}).get("selection", {}).get("rows", [])
+    if selected and 0 <= selected[0] < len(records):
+        st.session_state["open_case"] = dict(records[selected[0]])
+
+def load_case(record):
+    # Validate before changing any form state.
+    surgery_date = datetime.strptime(str(record["Fecha cirugía"]).strip(), "%d/%m/%Y").date()
+    patient = str(record["ID"]).strip()
+    surgery = str(record["Cirugía"]).strip()
+    clear_form()
+    st.session_state["patient:id"] = patient
+    st.session_state["patient:surgery"] = surgery if surgery in SURGERIES else "Otra"
+    if surgery not in SURGERIES:
+        st.session_state["patient:other_surgery"] = surgery
+    st.session_state["patient:surgery_date"] = surgery_date
+    # Let the existing connection logic recalculate the next number from Sheets.
+    st.session_state["active_patient"] = patient
+    st.session_state["current_endoscopy"] = None
 
 def change_section():
     if st.session_state["section"] == "Nuevo caso":
         st.session_state.reset_endoscopy_form = True
+        st.session_state.pop("open_case", None)
+
+# Reset before the table and input widgets are instantiated.
+if st.session_state.pop("reset_endoscopy_form", False):
+    clear_form()
+if case := st.session_state.pop("open_case", None):
+    try:
+        load_case(case)
+    except (KeyError, ValueError):
+        st.error("No se puede abrir este caso: revisa su ID, cirugía y fecha de cirugía.")
 
 with st.sidebar:
     st.header("Menú")
@@ -126,43 +159,43 @@ if message := st.session_state.pop("endoscopy_notice", None):
     st.success(message)
 
 if section != "Nuevo caso":
-    st.subheader("Casos pendientes" if section == "Pendientes" else "Todas las endoscopias")
+    st.subheader("Casos pendientes" if section == "Pendientes" else "Todos los casos")
     try:
         ws = endoscopy_sheet()
         data = ws.get_all_records(numericise_ignore=["all"]) if ws else []
-        pending = pending_patient_ids(data)
-        visible = (
-            [record for record in data if str(record.get("ID", "")).strip() in pending]
-            if section == "Pendientes" else data
-        )
-        patient_count = len({str(record.get("ID", "")).strip() for record in visible})
-        st.caption(f"{patient_count} casos · {len(visible)} endoscopias")
+        latest = latest_patient_records(data)
+        visible = [
+            record for record in latest
+            if section == "Total"
+            or str(record.get("Tratamiento", "")).strip().upper() != "FIN TRATAMIENTO"
+        ]
+        st.caption(f"{len(visible)} casos")
         if visible:
-            st.dataframe(visible, use_container_width=True, hide_index=True)
+            summary = [
+                {
+                    "ID": str(record["ID"]).strip(),
+                    "Tratamiento": record.get("Tratamiento", ""),
+                    "Fecha siguiente revisión": record.get("Fecha estimada siguiente recambio", ""),
+                }
+                for record in visible
+            ]
+            table_key = f"cases:{section}:{st.session_state.get('table_version', 0)}"
+            st.dataframe(
+                summary, use_container_width=True, hide_index=True,
+                key=table_key, selection_mode="single-row",
+                on_select=lambda key=table_key, records=visible: select_case(key, records),
+            )
+            st.caption("Selecciona una fila para añadir la siguiente endoscopia de ese paciente.")
         else:
             st.info("No hay casos pendientes." if section == "Pendientes"
                     else "Todavía no hay endoscopias registradas.")
         if section == "Pendientes":
             st.caption("Casos iniciados cuya última endoscopia no indica FIN TRATAMIENTO.")
-        else:
-            try:
-                previous = spreadsheet().worksheet("REGISTRO INICIAL").get_all_records(numericise_ignore=["all"])
-            except gspread.WorksheetNotFound:
-                previous = []
-            if previous:
-                with st.expander("Registros iniciales anteriores"):
-                    st.dataframe(previous, use_container_width=True, hide_index=True)
     except Exception as exc:
         st.error(connection_error(exc))
     st.divider()
 else:
     st.subheader("Nuevo caso")
-
-# Clear widget state before creating widgets on the run after a successful save.
-if st.session_state.pop("reset_endoscopy_form", False):
-    for key in list(st.session_state):
-        if key.startswith(("patient:", "endo:")) or key in ("active_patient", "current_endoscopy"):
-            del st.session_state[key]
 
 with st.container(border=True):
     st.subheader("Paciente y cirugía")
