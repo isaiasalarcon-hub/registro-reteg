@@ -2,6 +2,8 @@ import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import date
+from google.auth.exceptions import RefreshError
+from streamlit.errors import StreamlitSecretNotFoundError
 
 st.set_page_config(page_title="REGISTRO RETEG", layout="wide")
 st.title("REGISTRO RETEG")
@@ -9,11 +11,46 @@ st.caption("Registro de tratamiento endoscópico de dehiscencias posquirúrgicas
 
 @st.cache_resource
 def spreadsheet():
+    account = dict(st.secrets["gcp_service_account"])
+    # Accept literal escaped newlines from pasted TOML credentials.
+    if isinstance(account.get("private_key"), str):
+        account["private_key"] = account["private_key"].replace("\\n", "\n")
     credentials = Credentials.from_service_account_info(
-        dict(st.secrets["gcp_service_account"]),
+        account,
         scopes=["https://www.googleapis.com/auth/spreadsheets"],
     )
     return gspread.authorize(credentials).open_by_key(st.secrets["spreadsheet_id"])
+
+
+def connection_error(exc):
+    # Never show raw exception messages: they may contain credentials or sheet data.
+    if isinstance(exc, StreamlitSecretNotFoundError):
+        return "Falta configurar Secrets en Streamlit: spreadsheet_id y gcp_service_account."
+    if isinstance(exc, KeyError):
+        return "La configuración de Secrets está incompleta: comprueba spreadsheet_id y gcp_service_account."
+    if isinstance(exc, (PermissionError, gspread.exceptions.SpreadsheetNotFound)):
+        return "No se puede acceder a la hoja: comprueba spreadsheet_id y que la cuenta de servicio tenga permiso de Editor."
+    if isinstance(exc, RefreshError):
+        return "Google rechaza las credenciales de la cuenta de servicio. Revisa su clave en Streamlit Secrets."
+    if isinstance(exc, gspread.exceptions.APIError):
+        code = getattr(exc, "code", None)
+        if code == 403:
+            return "Google deniega el acceso (403). Revisa los permisos de la hoja y que Google Sheets API esté habilitada."
+        if code == 429:
+            return "Google ha limitado temporalmente las consultas. Espera un momento y pulsa Reintentar conexión."
+        return "Google Sheets no ha respondido correctamente. Reintenta la conexión."
+    if isinstance(exc, ValueError):
+        if str(exc) in (
+            "La estructura de ENDOSCOPIAS no coincide con el formulario.",
+            "Número de endoscopia no válido en los registros.",
+        ):
+            return str(exc)
+        return "Hay un formato no válido en las credenciales o en la numeración de ENDOSCOPIAS."
+    return "No se ha podido conectar con Google Sheets. Revisa la configuración y reintenta."
+
+def retry_connection():
+    spreadsheet.clear()
+    st.session_state.current_endoscopy = None
 
 SURGERIES = ["Sleeve", "Bypass gástrico", "SASI", "Funduplicatura / hiato",
              "Esofaguectomía", "Gastrectomía", "Otra"]
@@ -86,9 +123,9 @@ if patient_key and st.session_state.get("current_endoscopy") is None:
         ws = endoscopy_sheet()
         rows = ws.get_all_values()[1:] if ws else []
         st.session_state.current_endoscopy = next_endoscopy_number(rows, patient_key)
-    except Exception:
-        st.warning("No se puede calcular el número de endoscopia hasta conectar con Google Sheets.")
-        st.button("Reintentar conexión")
+    except Exception as exc:
+        st.warning(connection_error(exc))
+        st.button("Reintentar conexión", on_click=retry_connection)
 
 endoscopy_number = st.session_state.get("current_endoscopy")
 field_key = f"endo:{patient_key}:{endoscopy_number}:"
@@ -188,7 +225,5 @@ try:
     if previous:
         with st.expander("Registros iniciales anteriores"):
             st.dataframe(previous, use_container_width=True, hide_index=True)
-except ValueError as exc:
-    st.error(str(exc))
-except Exception:
-    st.info("No se pueden cargar los registros. Comprueba la conexión con Google Sheets en Streamlit Secrets.")
+except Exception as exc:
+    st.error(connection_error(exc))
