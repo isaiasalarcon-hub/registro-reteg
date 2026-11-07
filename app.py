@@ -614,7 +614,7 @@ with st.container(border=True):
         st.caption("Introduce primero el ID del paciente para adjuntar fotos o vídeos.")
 
     next_clicked = st.button(
-        "Siguiente endoscopia",
+        "SIGUIENTE ENDOSCOPIA",
         disabled=endoscopy_number is None or finished == "SI",
         help="Guarda la endoscopia actual y abre la siguiente conservando los datos del paciente.",
     )
@@ -656,10 +656,16 @@ if save_clicked or next_clicked:
                     )
                     st.rerun()
                 else:
-                    st.session_state.reset_endoscopy_form = True
+                    # Keep patient and surgery details; advance to the next endoscopy.
+                    for key in list(st.session_state):
+                        if key.startswith("endo:"):
+                            del st.session_state[key]
+                    updated_rows = ws.get_all_values()[1:]
+                    st.session_state.current_endoscopy = next_endoscopy_number(updated_rows, patient_key)
+                    st.session_state["case_page"] = True
                     st.session_state.endoscopy_notice = (
-                        f"Endoscopia {endoscopy_number} guardada en Google Sheets. "
-                        "Formulario listo para un nuevo registro."
+                        f"Endoscopia {endoscopy_number} guardada. SIGUIENTE ENDOSCOPIA: "
+                        f"{st.session_state.current_endoscopy}."
                     )
                     st.rerun()
         except ValueError as exc:
