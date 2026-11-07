@@ -326,6 +326,13 @@ if not show_form:
                 st.info("No hay casos pendientes.")
             st.divider()
 
+        if st.button("➕ NUEVO PACIENTE", type="primary", use_container_width=True, key="home_new_patient"):
+            st.session_state["section"] = "Nuevo caso"
+            st.session_state["case_page"] = False
+            st.session_state["reset_endoscopy_form"] = True
+            st.rerun()
+        st.divider()
+
         st.subheader("TOTAL")
         st.caption(f"{len(latest)} pacientes registrados · Un registro por paciente")
         if latest:
