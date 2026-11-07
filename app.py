@@ -308,7 +308,7 @@ if not show_form:
                         left, right = st.columns([3, 2])
                         with left:
                             st.button(
-                                f"ID {patient_id}  |  {name}  |  {therapy}",
+                                f"ID {patient_id}  |  {therapy}",
                                 key=f"pending:{patient_id}",
                                 use_container_width=True,
                                 on_click=open_patient,
@@ -324,7 +324,7 @@ if not show_form:
                             )
                         continue
                     st.button(
-                        f"ID {patient_id}  |  {name}  |  {therapy}  |  Próxima: {review}",
+                        f"ID {patient_id}  |  {therapy}  |  Próxima: {review}",
                         key=f"pending:{patient_id}",
                         use_container_width=True,
                         on_click=open_patient,
