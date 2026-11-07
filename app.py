@@ -61,7 +61,7 @@ DIGESTIVOS = ["GARCIA", "MARTIN", "MARTINEZ", "DE LA SANTA", "BELDA", "OTRO"]
 PLACES = ["Sala RX", "Sala convencional", "Quirófano urgencias", "UCI", "OTRO"]
 THERAPIES = ["ESPONJA", "VAC STENT", "STENT", "FIN TRATAMIENTO"]
 HEADERS = ["ID", "Cirugía", "Fecha cirugía", "N.º endoscopia", "Fecha endoscopia",
-           "Digestivo", "Lugar", "Tratamiento", "Fecha estimada siguiente recambio"]
+           "Digestivo", "Lugar", "Tratamiento", "Fecha estimada siguiente recambio", "Observaciones", "Cambio de terapia", "Fin de tratamiento"]
 
 def endoscopy_sheet(create=False):
     book = spreadsheet()
@@ -75,7 +75,11 @@ def endoscopy_sheet(create=False):
     if not headers and create:
         ws.append_row(HEADERS, value_input_option="RAW")
     elif headers and headers != HEADERS:
-        raise ValueError("La estructura de ENDOSCOPIAS no coincide con el formulario.")
+        if headers == HEADERS[:9]:
+            if create:
+                ws.update(range_name="J1:L1", values=[HEADERS[9:]])
+        else:
+            raise ValueError("La estructura de ENDOSCOPIAS no coincide con el formulario.")
     return ws
 
 def validate_record(patient_id, surgery, surgery_date, endoscopy_date, digestivo,
@@ -92,6 +96,35 @@ def validate_record(patient_id, surgery, surgery_date, endoscopy_date, digestivo
         if review < endoscopy_date:
             return "La fecha del siguiente recambio no puede ser anterior a la endoscopia."
     return None
+
+
+def is_finished(record):
+    value = str(record.get("Fin de tratamiento", "")).strip().upper()
+    if value in ("SI", "SÍ"):
+        return True
+    if value == "NO":
+        return False
+    return str(record.get("Tratamiento", "")).strip().upper() == "FIN TRATAMIENTO"
+
+
+def show_history(records, patient_id):
+    history = sorted(
+        [r for r in records if str(r.get("ID", "")).strip() == patient_id],
+        key=lambda r: int(r["N.º endoscopia"]),
+    )
+    if not history:
+        return
+    first = history[0]
+    with st.container(border=True):
+        st.subheader("Datos generales")
+        st.write(f"**ID:** {patient_id}")
+        st.write(f"**Cirugía:** {first.get('Cirugía', '')}")
+        st.write(f"**Fecha cirugía:** {first.get('Fecha cirugía', '')}")
+    tabs = st.tabs([f"Endoscopia {r['N.º endoscopia']}" for r in history])
+    for tab, record in zip(tabs, history):
+        with tab:
+            for field in HEADERS[4:]:
+                st.write(f"**{field}:** {record.get(field, '') or '—'}")
 
 
 def latest_patient_records(records):
@@ -175,16 +208,18 @@ if not show_form:
         ws = endoscopy_sheet()
         data = ws.get_all_records(numericise_ignore=["all"]) if ws else []
         latest = latest_patient_records(data)
-        visible = [
-            record for record in latest
+        visible = (
+            sorted(data, key=lambda r: (str(r.get("ID", "")), int(r.get("N.º endoscopia", 0))))
             if section == "Total"
-            or str(record.get("Tratamiento", "")).strip().upper() != "FIN TRATAMIENTO"
-        ]
-        st.caption(f"{len(visible)} casos")
+            else [r for r in latest if not is_finished(r)]
+        )
+        st.caption(f"{len(visible)} endoscopias" if section == "Total" else f"{len(visible)} casos pendientes")
         if visible:
             summary = [
                 {
                     "ID": str(record["ID"]).strip(),
+                    **({"N.º endoscopia": record.get("N.º endoscopia", ""),
+                        "Fecha endoscopia": record.get("Fecha endoscopia", "")} if section == "Total" else {}),
                     "Tratamiento": record.get("Tratamiento", ""),
                     "Fecha siguiente revisión": record.get("Fecha estimada siguiente recambio", ""),
                 }
@@ -196,12 +231,12 @@ if not show_form:
                 key=table_key, selection_mode="single-row",
                 on_select=lambda key=table_key, records=visible: select_case(key, records),
             )
-            st.caption("Selecciona una fila para añadir la siguiente endoscopia de ese paciente.")
+            st.caption("Selecciona una fila para consultar la historia completa del paciente.")
         else:
             st.info("No hay casos pendientes." if section == "Pendientes"
                     else "Todavía no hay endoscopias registradas.")
         if section == "Pendientes":
-            st.caption("Casos iniciados cuya última endoscopia no indica FIN TRATAMIENTO.")
+            st.caption("Casos iniciados sin fin de tratamiento registrado.")
     except Exception as exc:
         st.error(connection_error(exc))
     st.stop()
@@ -210,7 +245,15 @@ st.button("← Volver al listado", on_click=back_to_list)
 if section == "Nuevo caso" or not st.session_state.get("patient:id"):
     st.subheader("Nuevo caso")
 else:
-    st.subheader(f"Paciente {st.session_state['patient:id']} · Siguiente endoscopia")
+    st.subheader(f"Paciente {st.session_state['patient:id']} · Historia endoscópica")
+
+if st.session_state.get("case_page") and section == "Total":
+    try:
+        history_ws = endoscopy_sheet()
+        show_history(history_ws.get_all_records(numericise_ignore=["all"]) if history_ws else [],
+                     st.session_state["patient:id"])
+    except Exception as exc:
+        st.error(connection_error(exc))
 
 with st.container(border=True):
     st.subheader("Paciente y cirugía")
@@ -283,9 +326,17 @@ with st.container(border=True):
         review = st.date_input("Fecha estimada siguiente recambio", value=None,
                                format="DD/MM/YYYY", key=field_key + "review")
 
+    observations = st.text_area("OBSERVACIONES", key=field_key + "observations")
+    change_therapy = st.radio("CAMBIO DE TERAPIA", ["NO", "SI"], horizontal=True, key=field_key + "change")
+    finished = st.radio("FIN DE TRATAMIENTO", ["NO", "SI"], horizontal=True, key=field_key + "finished")
+    if therapy == "FIN TRATAMIENTO":
+        finished = "SI"
+    if finished == "SI":
+        review = None
+
     next_clicked = st.button(
         "Siguiente endoscopia",
-        disabled=endoscopy_number is None or therapy == "FIN TRATAMIENTO",
+        disabled=endoscopy_number is None or finished == "SI",
         help="Guarda la endoscopia actual y abre la siguiente conservando los datos del paciente.",
     )
 
@@ -293,7 +344,7 @@ save_clicked = st.button("Guardar endoscopia", type="primary",
                          disabled=endoscopy_number is None)
 if save_clicked or next_clicked:
     error = validate_record(patient_id, surgery, surgery_date, endoscopy_date,
-                            digestivo, place, therapy, review)
+                            digestivo, place, therapy, review if finished == "NO" else endoscopy_date)
     if error:
         st.error(error)
     else:
@@ -304,7 +355,7 @@ if save_clicked or next_clicked:
                 patient_key, surgery, surgery_date.strftime("%d/%m/%Y"),
                 str(endoscopy_number), endoscopy_date.strftime("%d/%m/%Y"),
                 digestivo, place, therapy,
-                review.strftime("%d/%m/%Y") if review else ""
+                review.strftime("%d/%m/%Y") if review else "", observations, change_therapy, finished
             ]
             matches = [row for row in rows if len(row) > 3
                        and row[0].strip() == patient_key
