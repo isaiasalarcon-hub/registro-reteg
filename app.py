@@ -486,12 +486,12 @@ with st.container(border=True):
             st.caption("La próxima endoscopia seguirá en PENDIENTES sin fecha asignada.")
 
     observations = st.text_area("OBSERVACIONES", key=field_key + "observations")
+    finished = "SI" if therapy == "FIN TRATAMIENTO" else st.radio(
+        "FIN DE TRATAMIENTO", ["NO", "SI"], horizontal=True, key=field_key + "finished"
+    )
     change_therapy = "NO"
-    if endoscopy_number != 1:
+    if endoscopy_number != 1 and finished == "NO":
         change_therapy = st.radio("CAMBIO DE TERAPIA", ["NO", "SI"], horizontal=True, key=field_key + "change")
-    finished = st.radio("FIN DE TRATAMIENTO", ["NO", "SI"], horizontal=True, key=field_key + "finished")
-    if therapy == "FIN TRATAMIENTO":
-        finished = "SI"
     if finished == "SI":
         review = None
 
