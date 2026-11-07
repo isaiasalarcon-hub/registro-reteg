@@ -213,10 +213,67 @@ if message := st.session_state.pop("endoscopy_notice", None):
 
 show_form = section == "Nuevo caso" or st.session_state.get("case_page", False)
 
+def open_date_editor(record):
+    st.session_state["date_edit_record"] = dict(record)
+
+
+def date_editor(record):
+    patient = str(record["ID"]).strip()
+    number = str(record["N.º endoscopia"]).strip()
+    st.subheader(f"Asignar próxima fecha · Paciente {patient}")
+    st.caption(f"Editar fecha de revisión de la endoscopia {number}, sin crear otra.")
+    st.write(f"**Fecha de endoscopia:** {record.get('Fecha endoscopia', '')}")
+    st.write(f"**Tratamiento:** {record.get('Tratamiento', '')}")
+    with st.form("assign_review_date"):
+        new_date = st.date_input("Fecha de la próxima revisión", value=None, format="DD/MM/YYYY")
+        submitted = st.form_submit_button("Guardar fecha", type="primary")
+    if submitted:
+        if new_date is None:
+            st.error("Selecciona una fecha.")
+            return
+        try:
+            original_date = datetime.strptime(str(record["Fecha endoscopia"]).strip(), "%d/%m/%Y").date()
+            if new_date < original_date:
+                st.error("La revisión no puede ser anterior a la endoscopia realizada.")
+                return
+            ws = endoscopy_sheet()
+            if ws is None:
+                st.error("No se ha encontrado la hoja ENDOSCOPIAS.")
+                return
+            rows = ws.get_all_values()
+            matching = [
+                i for i, row in enumerate(rows[1:], start=2)
+                if len(row) > 3 and row[0].strip() == patient and row[3].strip() == number
+            ]
+            if len(matching) != 1:
+                st.error("No se ha identificado una única endoscopia. No se ha modificado ningún dato.")
+                return
+            row_index = matching[0]
+            row = rows[row_index - 1]
+            old_value = row[8].strip() if len(row) > 8 else ""
+            if old_value not in ("", "PENDIENTE DE FECHA"):
+                st.error("La fecha ya ha sido modificada. Vuelve al listado para actualizar la información.")
+                return
+            if len(row) > 11 and row[11].strip().upper() in ("SI", "SÍ"):
+                st.error("El tratamiento está finalizado y no permite programar otra revisión.")
+                return
+            ws.update_cell(row_index, 9, new_date.strftime("%d/%m/%Y"))
+            st.session_state.pop("date_edit_record", None)
+            st.session_state["endoscopy_notice"] = f"Fecha de revisión del paciente {patient} actualizada."
+            st.rerun()
+        except Exception as exc:
+            st.error(connection_error(exc))
+
+
 def open_patient(record, source):
     st.session_state["open_case"] = dict(record)
     st.session_state["case_source"] = source
 
+
+if st.session_state.get("date_edit_record") is not None:
+    st.button("← Volver a PENDIENTES", on_click=lambda: st.session_state.pop("date_edit_record", None))
+    date_editor(st.session_state["date_edit_record"])
+    st.stop()
 
 if not show_form:
     st.session_state["last_list_section"] = section
@@ -236,6 +293,25 @@ if not show_form:
                     review = str(record.get("Fecha estimada siguiente recambio", "")) or "PENDIENTE DE FECHA"
                     number = int(record["N.º endoscopia"]) + 1
                     name = f"{number}ª ENDOSCOPIA"
+                    if review == "PENDIENTE DE FECHA":
+                        left, right = st.columns([3, 2])
+                        with left:
+                            st.button(
+                                f"ID {patient_id}  |  {name}  |  {therapy}",
+                                key=f"pending:{patient_id}",
+                                use_container_width=True,
+                                on_click=open_patient,
+                                args=(record, "Pendientes"),
+                            )
+                        with right:
+                            st.button(
+                                "PENDIENTE DE FECHA · Asignar",
+                                key=f"date:{patient_id}",
+                                use_container_width=True,
+                                on_click=open_date_editor,
+                                args=(record,),
+                            )
+                        continue
                     st.button(
                         f"ID {patient_id}  |  {name}  |  {therapy}  |  Próxima: {review}",
                         key=f"pending:{patient_id}",
