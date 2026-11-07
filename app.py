@@ -129,11 +129,15 @@ def media_section(patient, number):
     if uploads:
         st.caption(f"{len(uploads)} archivo(s) seleccionado(s). Pulsa SUBIR A DRIVE para guardarlos.")
     if uploads and st.button("SUBIR A DRIVE", key=f"upload_button:{patient}:{number}", type="primary"):
+        stage = "conexión con Drive"
         try:
             service = drive_service()
+            stage = "creación de carpeta del paciente"
             patient_folder = find_or_create_folder(service, DRIVE_ROOT_FOLDER, f"ID_{patient}")
+            stage = "creación de carpeta de endoscopia"
             folder_name = "ENDOSCOPIA INICIAL" if int(number) == 1 else f"ENDOSCOPIA {number}"
             endo_folder = find_or_create_folder(service, patient_folder, folder_name)
+            stage = "acceso a hoja ARCHIVOS"
             ws = media_sheet()
             saved = 0
             for upload in uploads:
@@ -144,14 +148,17 @@ def media_section(patient, number):
                 if ext not in {"jpg", "jpeg", "png", "webp", "heic", "mp4", "mov", "m4v", "webm"}:
                     st.error("Tipo de archivo no admitido.")
                     continue
+                stage = "preparación del archivo"
                 media = MediaIoBaseUpload(io.BytesIO(upload.getvalue()),
                                           mimetype=upload.type or "application/octet-stream",
                                           resumable=True)
                 safe_file = f"{uuid.uuid4().hex}.{ext}"
+                stage = "envío a Google Drive"
                 result = service.files().create(
                     body={"name": safe_file, "parents": [endo_folder]},
                     media_body=media, fields="id", supportsAllDrives=True
                 ).execute()
+                stage = "registro en Google Sheets"
                 ws.append_row([str(patient), str(number), upload.name,
                                upload.type or "", result["id"],
                                datetime.now().strftime("%d/%m/%Y %H:%M")],
@@ -181,7 +188,9 @@ def media_section(patient, number):
             if isinstance(exc, (KeyError, StreamlitSecretNotFoundError, RefreshError)):
                 st.error("Error de configuración o autenticación de la cuenta de servicio.")
             else:
-                st.error(f"Error al subir el archivo ({type(exc).__name__}). Revisa los registros de Streamlit para más detalles.")
+                st.error(f"Error durante {stage} ({type(exc).__name__}). Revisa los registros de Streamlit para más detalles.")
+                if isinstance(exc, TypeError):
+                    st.code(str(exc)[:400])
 
 
 st.set_page_config(page_title="REGISTRO RETEG", layout="wide")
