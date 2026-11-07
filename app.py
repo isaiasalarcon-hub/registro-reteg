@@ -1,9 +1,118 @@
 import streamlit as st
 import gspread
+import io
+import re
+import uuid
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
 from google.oauth2.service_account import Credentials
 from datetime import date, datetime
 from google.auth.exceptions import RefreshError
 from streamlit.errors import StreamlitSecretNotFoundError
+
+DRIVE_ROOT_FOLDER = "16ICuMpO49ULwZfyZBNHTWt754A-y0hwd"
+MEDIA_HEADERS = ["ID", "N.º endoscopia", "Archivo", "Tipo", "Drive ID", "Fecha subida"]
+
+
+def drive_service():
+    account = dict(st.secrets["gcp_service_account"])
+    if isinstance(account.get("private_key"), str):
+        account["private_key"] = account["private_key"].replace("\\n", "\n")
+    creds = Credentials.from_service_account_info(
+        account, scopes=["https://www.googleapis.com/auth/drive"]
+    )
+    return build("drive", "v3", credentials=creds, cache_discovery=False)
+
+
+def media_sheet():
+    book = spreadsheet()
+    try:
+        ws = book.worksheet("ARCHIVOS")
+    except gspread.WorksheetNotFound:
+        ws = book.add_worksheet(title="ARCHIVOS", rows=1000, cols=len(MEDIA_HEADERS))
+    if not ws.row_values(1):
+        ws.update("A1:F1", [MEDIA_HEADERS])
+    elif ws.row_values(1) != MEDIA_HEADERS:
+        raise ValueError("La estructura de ARCHIVOS no coincide.")
+    return ws
+
+
+def find_or_create_folder(service, parent, name):
+    safe_name = name.replace("'", "\\'")
+    query = (
+        f"'{parent}' in parents and name = '{safe_name}' and "
+        "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+    )
+    found = service.files().list(q=query, fields="files(id,name)", page_size=10,
+                                 supportsAllDrives=True, includeItemsFromAllDrives=True).execute()
+    if found.get("files"):
+        return found["files"][0]["id"]
+    created = service.files().create(
+        body={"name": name, "mimeType": "application/vnd.google-apps.folder",
+              "parents": [parent]},
+        fields="id", supportsAllDrives=True
+    ).execute()
+    return created["id"]
+
+
+def media_section(patient, number):
+    st.markdown("**FOTOS Y VÍDEOS**")
+    try:
+        ws = media_sheet()
+        existing = [
+            row for row in ws.get_all_records(numericise_ignore=["all"])
+            if str(row.get("ID", "")).strip() == str(patient)
+            and str(row.get("N.º endoscopia", "")).strip() == str(number)
+        ]
+        for row in existing:
+            file_id = str(row.get("Drive ID", "")).strip()
+            if file_id:
+                st.link_button(
+                    f"Ver archivo: {row.get('Archivo', 'Adjunto')}",
+                    f"https://drive.google.com/file/d/{file_id}/view",
+                )
+    except Exception:
+        st.warning("No se ha podido consultar el listado de archivos adjuntos.")
+    uploads = st.file_uploader(
+        "Seleccionar fotos o vídeos del móvil",
+        type=["jpg", "jpeg", "png", "webp", "heic", "mp4", "mov", "m4v", "webm"],
+        accept_multiple_files=True, key=f"upload:{patient}:{number}",
+    )
+    if uploads and st.button("SUBIR A DRIVE", key=f"upload_button:{patient}:{number}"):
+        try:
+            service = drive_service()
+            patient_folder = find_or_create_folder(service, DRIVE_ROOT_FOLDER, f"ID_{patient}")
+            folder_name = "ENDOSCOPIA INICIAL" if int(number) == 1 else f"ENDOSCOPIA {number}"
+            endo_folder = find_or_create_folder(service, patient_folder, folder_name)
+            ws = media_sheet()
+            saved = 0
+            for upload in uploads:
+                if upload.size > 150 * 1024 * 1024:
+                    st.error("Un archivo supera 150 MB. Súbelo comprimido.")
+                    continue
+                ext = upload.name.rsplit(".", 1)[-1].lower()
+                if ext not in {"jpg", "jpeg", "png", "webp", "heic", "mp4", "mov", "m4v", "webm"}:
+                    st.error("Tipo de archivo no admitido.")
+                    continue
+                media = MediaIoBaseUpload(io.BytesIO(upload.getvalue()),
+                                          mimetype=upload.type or "application/octet-stream",
+                                          resumable=True)
+                safe_file = f"{uuid.uuid4().hex}.{ext}"
+                result = service.files().create(
+                    body={"name": safe_file, "parents": [endo_folder]},
+                    media_body=media, fields="id", supportsAllDrives=True
+                ).execute()
+                ws.append_row([str(patient), str(number), upload.name,
+                               upload.type or "", result["id"],
+                               datetime.now().strftime("%d/%m/%Y %H:%M")],
+                              value_input_option="RAW")
+                saved += 1
+            if saved:
+                st.success(f"{saved} archivo(s) guardado(s) en Drive.")
+                st.rerun()
+        except Exception:
+            st.error("No se ha podido subir a Drive. Comprueba que la cuenta de servicio tiene acceso de escritura a la carpeta RETEG.")
+
 
 st.set_page_config(page_title="REGISTRO RETEG", layout="wide")
 st.title("REGISTRO RETEG")
@@ -138,6 +247,7 @@ def show_history(records, patient_id):
     with st.container(border=True):
         for field in HEADERS[4:]:
             st.write(f"**{field}:** {record.get(field, '') or '—'}")
+    media_section(patient_id, record["N.º endoscopia"])
 
 
 def latest_patient_records(records):
@@ -494,6 +604,9 @@ with st.container(border=True):
         change_therapy = st.radio("CAMBIO DE TERAPIA", ["NO", "SI"], horizontal=True, key=field_key + "change")
     if finished == "SI":
         review = None
+
+    if endoscopy_number and endoscopy_number > 1:
+        st.caption("Las fotos y vídeos de esta endoscopia se podrán subir tras guardarla, desde TOTAL.")
 
     next_clicked = st.button(
         "Siguiente endoscopia",
