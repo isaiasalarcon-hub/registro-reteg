@@ -125,7 +125,7 @@ def show_history(records, patient_id):
         "Seleccionar endoscopia",
         options,
         format_func=lambda i: (
-            f"Endoscopia {history[i]['N.º endoscopia']} · "
+            f"{'ENDOSCOPIA INICIAL' if int(history[i]['N.º endoscopia']) == 1 else str(history[i]['N.º endoscopia']) + 'ª ENDOSCOPIA'} · "
             f"{history[i].get('Fecha endoscopia', '')} · "
             f"{history[i].get('Tratamiento', '')}"
         ),
@@ -303,7 +303,7 @@ endoscopy_number = st.session_state.get("current_endoscopy")
 field_key = f"endo:{patient_key}:{endoscopy_number}:"
 
 with st.container(border=True):
-    st.subheader("Endoscopia actual")
+    st.subheader("ENDOSCOPIA INICIAL" if endoscopy_number == 1 else f"{endoscopy_number}ª ENDOSCOPIA" if endoscopy_number else "Endoscopia actual")
     c1, c2 = st.columns(2)
     with c1:
         st.metric("N.º de endoscopia", endoscopy_number if endoscopy_number else "—")
