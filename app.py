@@ -82,7 +82,9 @@ def media_section(patient, number):
             and str(row.get("N.º endoscopia", "")).strip() == str(number)
         ]
         if existing:
-            st.caption(f"Archivos de esta endoscopia: {len(existing)}")
+            st.success(f"Archivos guardados en Drive: {len(existing)}")
+        else:
+            st.info("Todavía no hay fotografías ni vídeos guardados para esta endoscopia.")
         for row in existing:
             file_id = str(row.get("Drive ID", "")).strip()
             if not file_id:
@@ -116,12 +118,16 @@ def media_section(patient, number):
                 )
     except Exception:
         st.warning("No se ha podido consultar el listado de archivos adjuntos.")
+    if notice := st.session_state.pop(f"upload_notice:{patient}:{number}", None):
+        st.success(notice)
     uploads = st.file_uploader(
         "Seleccionar fotos o vídeos del móvil",
         type=["jpg", "jpeg", "png", "webp", "heic", "mp4", "mov", "m4v", "webm"],
         accept_multiple_files=True, key=f"upload:{patient}:{number}",
     )
-    if uploads and st.button("SUBIR A DRIVE", key=f"upload_button:{patient}:{number}"):
+    if uploads:
+        st.caption(f"{len(uploads)} archivo(s) seleccionado(s). Pulsa SUBIR A DRIVE para guardarlos.")
+    if uploads and st.button("SUBIR A DRIVE", key=f"upload_button:{patient}:{number}", type="primary"):
         try:
             service = drive_service()
             patient_folder = find_or_create_folder(service, DRIVE_ROOT_FOLDER, f"ID_{patient}")
@@ -151,7 +157,7 @@ def media_section(patient, number):
                               value_input_option="RAW")
                 saved += 1
             if saved:
-                st.success(f"{saved} archivo(s) guardado(s) en Drive.")
+                st.session_state[f"upload_notice:{patient}:{number}"] = f"{saved} archivo(s) guardado(s) en Drive."
                 st.rerun()
         except Exception:
             st.error("No se ha podido subir a Drive. Comprueba que la cuenta de servicio tiene acceso de escritura a la carpeta RETEG.")
