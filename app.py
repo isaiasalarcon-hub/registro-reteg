@@ -133,8 +133,16 @@ def load_case(record):
     # Let the existing connection logic recalculate the next number from Sheets.
     st.session_state["active_patient"] = patient
     st.session_state["current_endoscopy"] = None
+    st.session_state["case_page"] = True
+
+def back_to_list():
+    st.session_state["case_page"] = False
+    st.session_state["section"] = st.session_state.get("last_list_section", "Pendientes")
+    st.session_state["reset_endoscopy_form"] = True
+    st.session_state.pop("open_case", None)
 
 def change_section():
+    st.session_state["case_page"] = False
     if st.session_state["section"] == "Nuevo caso":
         st.session_state.reset_endoscopy_form = True
         st.session_state.pop("open_case", None)
@@ -158,7 +166,10 @@ with st.sidebar:
 if message := st.session_state.pop("endoscopy_notice", None):
     st.success(message)
 
-if section != "Nuevo caso":
+show_form = section == "Nuevo caso" or st.session_state.get("case_page", False)
+
+if not show_form:
+    st.session_state["last_list_section"] = section
     st.subheader("Casos pendientes" if section == "Pendientes" else "Todos los casos")
     try:
         ws = endoscopy_sheet()
@@ -193,9 +204,13 @@ if section != "Nuevo caso":
             st.caption("Casos iniciados cuya última endoscopia no indica FIN TRATAMIENTO.")
     except Exception as exc:
         st.error(connection_error(exc))
-    st.divider()
-else:
+    st.stop()
+
+st.button("← Volver al listado", on_click=back_to_list)
+if section == "Nuevo caso" or not st.session_state.get("patient:id"):
     st.subheader("Nuevo caso")
+else:
+    st.subheader(f"Paciente {st.session_state['patient:id']} · Siguiente endoscopia")
 
 with st.container(border=True):
     st.subheader("Paciente y cirugía")
