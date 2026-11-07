@@ -27,6 +27,9 @@ def connection_error(exc):
     if isinstance(exc, StreamlitSecretNotFoundError):
         return "Falta configurar Secrets en Streamlit: spreadsheet_id y gcp_service_account."
     if isinstance(exc, KeyError):
+        field = exc.args[0] if exc.args else None
+        if field in ("spreadsheet_id", "gcp_service_account"):
+            return f"Falta el campo {field} en Streamlit Secrets."
         return "La configuración de Secrets está incompleta: comprueba spreadsheet_id y gcp_service_account."
     if isinstance(exc, (PermissionError, gspread.exceptions.SpreadsheetNotFound)):
         return "No se puede acceder a la hoja: comprueba spreadsheet_id y que la cuenta de servicio tenga permiso de Editor."
