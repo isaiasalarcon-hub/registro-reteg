@@ -72,6 +72,27 @@ def oauth_flow(state=None):
     return flow
 
 
+@st.cache_data(ttl=180, max_entries=20, show_spinner=False)
+def exchange_google_code_once(code, client_id, client_secret, redirect_uri):
+    """Deduplicate token exchange across Streamlit reruns and sessions."""
+    response = requests.post(
+        "https://oauth2.googleapis.com/token",
+        data={
+            "code": code,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code",
+        },
+        timeout=25,
+    )
+    payload = response.json()
+    if not response.ok:
+        return {"ok": False, "error": payload.get("error", "unknown"),
+                "description": str(payload.get("error_description", ""))}
+    return {"ok": True, "tokens": payload}
+
+
 def authorize_drive_callback():
     # The OAuth redirect may open a new Streamlit session; validate a signed,
     # short-lived state rather than relying on session_state across redirects.
@@ -92,33 +113,19 @@ def authorize_drive_callback():
         # Exchange the code directly: Google can return a different scope order
         # or extra identity scopes, which oauthlib otherwise rejects.
         config = st.secrets["reteg_oauth"]
-        response = requests.post(
-            "https://oauth2.googleapis.com/token",
-            data={
-                "code": code,
-                "client_id": config["client_id"],
-                "client_secret": config["client_secret"],
-                "redirect_uri": RETEG_REDIRECT_URI,
-                "grant_type": "authorization_code",
-            },
-            timeout=25,
+        result = exchange_google_code_once(
+            code, config["client_id"], config["client_secret"], RETEG_REDIRECT_URI
         )
-        if not response.ok:
-            error_payload = response.json()
-            reason = error_payload.get("error", "unknown")
-            description = str(error_payload.get("error_description", ""))
-            # Google returns a generic description, never the OAuth code or secret.
-            safe_descriptions = {
-                "Bad Request", "Malformed auth code.", "Token has been expired or revoked.",
-                "The OAuth client was not found.",
-            }
-            detail = f" Detalle de Google: {description}" if description in safe_descriptions else ""
+        if not result["ok"]:
+            reason = result["error"]
+            description = result["description"]
             st.session_state["drive_auth_error"] = (
-                f"Google no pudo validar el código de autorización ({reason}).{detail} "
-                "Comprueba que el secreto OAuth activo de Google Cloud coincide con el de Streamlit Secrets."
+                f"Google rechazó la autorización ({reason}). "
+                f"Detalle: {description[:120] if description else 'sin detalle'}. "
+                "Si persiste, revisaremos el retorno de Google sin cambiar credenciales."
             )
             return
-        tokens = response.json()
+        tokens = result["tokens"]
         creds = UserCredentials(
             token=tokens["access_token"],
             refresh_token=tokens.get("refresh_token"),
