@@ -461,11 +461,13 @@ def endoscopy_sheet(create=False):
     return ws
 
 def validate_record(patient_id, surgery, surgery_date, endoscopy_date, digestivo,
-                    place, therapy, review, pending_date=False, finished="NO"):
+                    place, therapy, review, pending_date=False, finished="NO", observations=""):
     if not patient_id.strip() or not (surgery or "").strip() or not surgery_date or not endoscopy_date:
         return "Completa el ID, la cirugía y ambas fechas."
     if not digestivo or not place or not therapy:
         return "Selecciona digestivo, lugar y tratamiento."
+    if not (observations or "").strip():
+        return "Completa OBSERVACIONES. Si no hay incidencias, escribe Sin incidencias."
     if endoscopy_date < surgery_date:
         return "La fecha de endoscopia no puede ser anterior a la cirugía."
     if finished != "SI" and therapy != "FIN TRATAMIENTO":
@@ -483,6 +485,83 @@ def is_finished(record):
     if value == "NO":
         return False
     return str(record.get("Tratamiento", "")).strip().upper() == "FIN TRATAMIENTO"
+
+
+def parse_record_date(value):
+    try:
+        return datetime.strptime(str(value).strip(), "%d/%m/%Y").date()
+    except (ValueError, TypeError):
+        return None
+
+
+def edit_existing_endoscopy(record):
+    """Edit a saved endoscopy in place, retaining its patient ID and number."""
+    patient = str(record["ID"]).strip()
+    number = str(record["N.º endoscopia"]).strip()
+    prefix = f"edit:{patient}:{number}:"
+    st.markdown(f"**EDITAR ENDOSCOPIA {number}**")
+    st.caption("Se actualizará el registro existente. El ID y el número no cambian, para conservar los archivos adjuntos.")
+    with st.form(prefix + "form"):
+        surgery_options = SURGERIES
+        old_surgery = str(record.get("Cirugía", "")).strip()
+        surgery_choice = st.selectbox("Cirugía", surgery_options,
+            index=surgery_options.index(old_surgery) if old_surgery in surgery_options else len(surgery_options)-1)
+        surgery = st.text_input("Especificar cirugía", value=old_surgery if surgery_choice == "Otra" and old_surgery not in surgery_options else "") if surgery_choice == "Otra" else surgery_choice
+        surgery_date = st.date_input("Fecha cirugía", value=parse_record_date(record.get("Fecha cirugía")), format="DD/MM/YYYY")
+        endoscopy_date = st.date_input("Fecha endoscopia", value=parse_record_date(record.get("Fecha endoscopia")), format="DD/MM/YYYY")
+        old_digestivo = str(record.get("Digestivo", "")).strip()
+        digestivo_choice = st.selectbox("Digestivo", DIGESTIVOS, index=DIGESTIVOS.index(old_digestivo) if old_digestivo in DIGESTIVOS else (DIGESTIVOS.index("OTRO") if old_digestivo else None))
+        digestivo = st.text_input("Especificar digestivo", value=old_digestivo.removeprefix("OTRO: ").strip() if old_digestivo else "") if digestivo_choice == "OTRO" else digestivo_choice
+        old_place = str(record.get("Lugar", "")).strip()
+        place_choice = st.selectbox("Lugar", PLACES, index=PLACES.index(old_place) if old_place in PLACES else (PLACES.index("OTRO") if old_place else None))
+        place = st.text_input("Especificar lugar", value=old_place.removeprefix("OTRO: ").strip() if old_place else "") if place_choice == "OTRO" else place_choice
+        old_therapy = str(record.get("Tratamiento", "")).strip()
+        therapy = st.selectbox("Tratamiento", THERAPIES, index=THERAPIES.index(old_therapy) if old_therapy in THERAPIES else None)
+        old_finished = is_finished(record)
+        finished = "SI" if therapy == "FIN TRATAMIENTO" else st.radio("Fin de tratamiento", ["NO", "SI"], index=1 if old_finished else 0, horizontal=True)
+        old_review = str(record.get("Fecha estimada siguiente recambio", "")).strip()
+        review = None
+        pending_date = False
+        if finished == "NO":
+            pending_date = st.checkbox("PENDIENTE DE FECHA", value=old_review == "PENDIENTE DE FECHA")
+            if not pending_date:
+                review = st.date_input("Fecha estimada siguiente recambio", value=parse_record_date(old_review), format="DD/MM/YYYY")
+        observations = st.text_area("OBSERVACIONES", value=str(record.get("Observaciones", "")))
+        old_change = str(record.get("Cambio de terapia", "NO")).strip().upper()
+        change_therapy = "NO"
+        if number != "1" and finished == "NO":
+            change_therapy = st.radio("CAMBIO DE TERAPIA", ["NO", "SI"], index=1 if old_change in ("SI", "SÍ") else 0, horizontal=True)
+        submitted = st.form_submit_button("GUARDAR CAMBIOS", type="primary")
+    if not submitted:
+        return
+    error = validate_record(patient, surgery, surgery_date, endoscopy_date, digestivo,
+                            place, therapy, review, pending_date=pending_date,
+                            finished=finished, observations=observations)
+    if error:
+        st.error(error)
+        return
+    try:
+        ws = endoscopy_sheet(create=True)
+        rows = ws.get_all_values()
+        matches = [i for i, row in enumerate(rows[1:], start=2)
+                   if len(row) > 3 and row[0].strip() == patient and row[3].strip() == number]
+        if len(matches) != 1:
+            st.error("No se ha encontrado una única endoscopia. No se han modificado datos.")
+            return
+        new_row = [patient, surgery, surgery_date.strftime("%d/%m/%Y"), number,
+                   endoscopy_date.strftime("%d/%m/%Y"), digestivo, place, therapy,
+                   review.strftime("%d/%m/%Y") if review else ("PENDIENTE DE FECHA" if pending_date and finished == "NO" else ""),
+                   observations.strip(), change_therapy, finished]
+        # Update the patient's surgery details consistently across all endoscopies.
+        for i, row in enumerate(rows[1:], start=2):
+            if row and row[0].strip() == patient and i != matches[0]:
+                ws.update(range_name=f"B{i}:C{i}", values=[[surgery, surgery_date.strftime("%d/%m/%Y")]])
+        ws.update(range_name=f"A{matches[0]}:L{matches[0]}", values=[new_row])
+        st.session_state.pop("edit_endoscopy", None)
+        st.session_state["endoscopy_notice"] = f"Endoscopia {number} del paciente {patient} actualizada."
+        st.rerun()
+    except Exception as exc:
+        st.error(connection_error(exc))
 
 
 def show_history(records, patient_id):
@@ -513,6 +592,15 @@ def show_history(records, patient_id):
     with st.container(border=True):
         for field in HEADERS[4:]:
             st.write(f"**{field}:** {record.get(field, '') or '—'}")
+    if st.session_state.get("edit_endoscopy") == f"{patient_id}:{record['N.º endoscopia']}":
+        if st.button("CANCELAR EDICIÓN", key=f"cancel_edit:{patient_id}:{record['N.º endoscopia']}"):
+            st.session_state.pop("edit_endoscopy", None)
+            st.rerun()
+        edit_existing_endoscopy(record)
+    else:
+        if st.button("✏️ EDITAR DATOS", key=f"start_edit:{patient_id}:{record['N.º endoscopia']}"):
+            st.session_state["edit_endoscopy"] = f"{patient_id}:{record['N.º endoscopia']}"
+            st.rerun()
     media_section(patient_id, record["N.º endoscopia"])
 
 
@@ -548,6 +636,7 @@ def load_case(record):
     patient = str(record["ID"]).strip()
     surgery = str(record["Cirugía"]).strip()
     clear_form()
+    st.session_state.pop("edit_endoscopy", None)
     st.session_state["patient:id"] = patient
     st.session_state["patient:surgery"] = surgery if surgery in SURGERIES else "Otra"
     if surgery not in SURGERIES:
@@ -881,7 +970,8 @@ save_clicked = st.button("GUARDAR ENDOSCOPIA", type="primary",
 if save_clicked:
     error = validate_record(patient_id, surgery, surgery_date, endoscopy_date,
                             digestivo, place, therapy, review if finished == "NO" else None,
-                            pending_date=pending_date and finished == "NO", finished=finished)
+                            pending_date=pending_date and finished == "NO", finished=finished,
+                            observations=observations)
     if error:
         st.error(error)
     else:
