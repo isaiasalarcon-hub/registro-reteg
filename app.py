@@ -46,9 +46,11 @@ def oauth_config():
 
 
 def oauth_state():
+    # Signed, short-lived state. It also transports the PKCE verifier across
+    # Streamlit browser sessions after the Google redirect.
     timestamp = str(int(time.time()))
-    nonce = secrets.token_urlsafe(18)
-    payload = f"{timestamp}.{nonce}"
+    verifier = secrets.token_urlsafe(48)
+    payload = f"{timestamp}.{verifier}"
     secret = str(st.secrets["reteg_oauth"]["client_secret"]).encode()
     signature = hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
     return f"{payload}.{signature}"
@@ -73,7 +75,7 @@ def oauth_flow(state=None):
 
 
 @st.cache_data(ttl=180, max_entries=20, show_spinner=False)
-def exchange_google_code_once(code, client_id, client_secret, redirect_uri):
+def exchange_google_code_once(code, client_id, client_secret, redirect_uri, code_verifier):
     """Deduplicate token exchange across Streamlit reruns and sessions."""
     response = requests.post(
         "https://oauth2.googleapis.com/token",
@@ -83,6 +85,7 @@ def exchange_google_code_once(code, client_id, client_secret, redirect_uri):
             "client_secret": client_secret,
             "redirect_uri": redirect_uri,
             "grant_type": "authorization_code",
+            "code_verifier": code_verifier,
         },
         timeout=25,
     )
@@ -114,7 +117,8 @@ def authorize_drive_callback():
         # or extra identity scopes, which oauthlib otherwise rejects.
         config = st.secrets["reteg_oauth"]
         result = exchange_google_code_once(
-            code, config["client_id"], config["client_secret"], RETEG_REDIRECT_URI
+            code, config["client_id"], config["client_secret"], RETEG_REDIRECT_URI,
+            state.split(".", 2)[1]
         )
         if not result["ok"]:
             reason = result["error"]
@@ -185,10 +189,18 @@ def drive_authorization_ui():
     if drive_credentials() is not None:
         return True
     try:
+        # Explicit PKCE challenge paired with the verifier carried in signed state.
+        import base64
+        state = oauth_state()
+        verifier = state.split(".", 2)[1]
+        challenge = base64.urlsafe_b64encode(
+            hashlib.sha256(verifier.encode("ascii")).digest()
+        ).decode("ascii").rstrip("=")
         flow = oauth_flow()
         url, _ = flow.authorization_url(
-            access_type="offline", prompt="consent", state=oauth_state(),
+            access_type="offline", prompt="consent", state=state,
             include_granted_scopes="false",
+            code_challenge=challenge, code_challenge_method="S256",
         )
         st.info("Autoriza tu cuenta de Google para ver y subir fotos y vídeos a RETEG.")
         st.link_button("AUTORIZAR GOOGLE DRIVE", url)
