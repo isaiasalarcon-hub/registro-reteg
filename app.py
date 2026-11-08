@@ -849,6 +849,16 @@ if st.session_state.get("case_page") and st.session_state.get("case_source") == 
         st.error(connection_error(exc))
 
 if section == "Nuevo caso" and not st.session_state.get("case_page"):
+    # Authorize BEFORE entering a new patient's data. Google redirects away
+    # from Streamlit and otherwise discards unsaved widget values.
+    if not st.session_state.get("patient:id") and not drive_credentials():
+        st.subheader("Conectar Google Drive")
+        st.info(
+            "Para adjuntar fotos a la ENDOSCOPIA INICIAL, autoriza Drive antes "
+            "de rellenar el formulario. Así no perderás los datos al volver de Google."
+        )
+        drive_authorization_ui()
+        st.stop()
     with st.container(border=True):
         st.markdown("**PACIENTE**")
         c1, c2, c3 = st.columns([1, 2, 1], gap="small")
@@ -961,6 +971,7 @@ with st.container(border=True):
         review = None
 
     if patient_key and endoscopy_number:
+        st.caption("Puedes adjuntar fotos y vídeos también en la ENDOSCOPIA INICIAL, antes de guardar el formulario.")
         media_section(patient_key, endoscopy_number)
     else:
         st.caption("Introduce primero el ID del paciente para adjuntar fotos o vídeos.")
