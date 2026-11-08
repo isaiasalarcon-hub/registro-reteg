@@ -461,14 +461,14 @@ def endoscopy_sheet(create=False):
     return ws
 
 def validate_record(patient_id, surgery, surgery_date, endoscopy_date, digestivo,
-                    place, therapy, review, pending_date=False):
+                    place, therapy, review, pending_date=False, finished="NO"):
     if not patient_id.strip() or not (surgery or "").strip() or not surgery_date or not endoscopy_date:
         return "Completa el ID, la cirugía y ambas fechas."
     if not digestivo or not place or not therapy:
         return "Selecciona digestivo, lugar y tratamiento."
     if endoscopy_date < surgery_date:
         return "La fecha de endoscopia no puede ser anterior a la cirugía."
-    if therapy != "FIN TRATAMIENTO":
+    if finished != "SI" and therapy != "FIN TRATAMIENTO":
         if review is None and not pending_date:
             return "Indica la fecha estimada del siguiente recambio o marca PENDIENTE DE FECHA."
         if review is not None and review < endoscopy_date:
@@ -876,18 +876,12 @@ with st.container(border=True):
     else:
         st.caption("Introduce primero el ID del paciente para adjuntar fotos o vídeos.")
 
-    next_clicked = st.button(
-        "SIGUIENTE ENDOSCOPIA",
-        disabled=endoscopy_number is None or finished == "SI",
-        help="Guarda la endoscopia actual y abre la siguiente conservando los datos del paciente.",
-    )
-
-save_clicked = st.button("Guardar endoscopia", type="primary",
+save_clicked = st.button("GUARDAR ENDOSCOPIA", type="primary",
                          disabled=endoscopy_number is None)
-if save_clicked or next_clicked:
+if save_clicked:
     error = validate_record(patient_id, surgery, surgery_date, endoscopy_date,
-                            digestivo, place, therapy, review if finished == "NO" else endoscopy_date,
-                            pending_date=pending_date and finished == "NO")
+                            digestivo, place, therapy, review if finished == "NO" else None,
+                            pending_date=pending_date and finished == "NO", finished=finished)
     if error:
         st.error(error)
     else:
@@ -911,26 +905,26 @@ if save_clicked or next_clicked:
             else:
                 if not matches:
                     ws.append_row(record, value_input_option="RAW")
-                if next_clicked:
-                    updated_rows = ws.get_all_values()[1:]
-                    st.session_state.current_endoscopy = next_endoscopy_number(updated_rows, patient_key)
-                    st.session_state.endoscopy_notice = (
-                        f"Endoscopia {endoscopy_number} guardada. Puedes rellenar la siguiente."
-                    )
-                    st.rerun()
-                else:
-                    # Keep patient and surgery details; advance to the next endoscopy.
-                    for key in list(st.session_state):
-                        if key.startswith("endo:"):
-                            del st.session_state[key]
+                # One save action: clear endoscopy fields and prepare the next
+                # form only when treatment is still ongoing.
+                for key in list(st.session_state):
+                    if key.startswith("endo:"):
+                        del st.session_state[key]
+                if finished == "NO":
                     updated_rows = ws.get_all_values()[1:]
                     st.session_state.current_endoscopy = next_endoscopy_number(updated_rows, patient_key)
                     st.session_state["case_page"] = True
                     st.session_state.endoscopy_notice = (
-                        f"Endoscopia {endoscopy_number} guardada. SIGUIENTE ENDOSCOPIA: "
-                        f"{st.session_state.current_endoscopy}."
+                        f"Endoscopia {endoscopy_number} guardada. "
+                        f"Preparada la endoscopia {st.session_state.current_endoscopy}."
                     )
-                    st.rerun()
+                else:
+                    st.session_state.current_endoscopy = None
+                    st.session_state["case_page"] = False
+                    st.session_state.endoscopy_notice = (
+                        f"Endoscopia {endoscopy_number} guardada. Tratamiento finalizado."
+                    )
+                st.rerun()
         except ValueError as exc:
             st.error(str(exc))
         except Exception:
