@@ -104,10 +104,18 @@ def authorize_drive_callback():
             timeout=25,
         )
         if not response.ok:
-            reason = response.json().get("error", "unknown")
+            error_payload = response.json()
+            reason = error_payload.get("error", "unknown")
+            description = str(error_payload.get("error_description", ""))
+            # Google returns a generic description, never the OAuth code or secret.
+            safe_descriptions = {
+                "Bad Request", "Malformed auth code.", "Token has been expired or revoked.",
+                "The OAuth client was not found.",
+            }
+            detail = f" Detalle de Google: {description}" if description in safe_descriptions else ""
             st.session_state["drive_auth_error"] = (
-                f"Google no pudo validar el código de autorización ({reason}). "
-                "Vuelve a pulsar AUTORIZAR GOOGLE DRIVE."
+                f"Google no pudo validar el código de autorización ({reason}).{detail} "
+                "Comprueba que el secreto OAuth activo de Google Cloud coincide con el de Streamlit Secrets."
             )
             return
         tokens = response.json()
