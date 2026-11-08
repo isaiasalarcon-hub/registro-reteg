@@ -3,10 +3,17 @@ import gspread
 import io
 import re
 import uuid
+import time
+import hmac
+import hashlib
+import secrets
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 from googleapiclient.errors import HttpError
 from google.oauth2.service_account import Credentials
+from google.oauth2.credentials import Credentials as UserCredentials
+from google.auth.transport.requests import Request
+from google_auth_oauthlib.flow import Flow
 from datetime import date, datetime
 from google.auth.exceptions import RefreshError
 from streamlit.errors import StreamlitSecretNotFoundError
@@ -15,14 +22,123 @@ DRIVE_ROOT_FOLDER = "16ICuMpO49ULwZfyZBNHTWt754A-y0hwd"
 MEDIA_HEADERS = ["ID", "N.º endoscopia", "Archivo", "Tipo", "Drive ID", "Fecha subida"]
 
 
+OAUTH_SCOPES = [
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "openid",
+]
+RETEG_OWNER_EMAIL = "isaiasalarcon@gmail.com"
+RETEG_REDIRECT_URI = "https://registro-reteg-88lhepzn444rsz5vkystm9.streamlit.app/"
+
+
+def oauth_config():
+    config = st.secrets["reteg_oauth"]
+    return {
+        "web": {
+            "client_id": config["client_id"],
+            "client_secret": config["client_secret"],
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": [RETEG_REDIRECT_URI],
+        }
+    }
+
+
+def oauth_state():
+    timestamp = str(int(time.time()))
+    nonce = secrets.token_urlsafe(18)
+    payload = f"{timestamp}.{nonce}"
+    secret = str(st.secrets["reteg_oauth"]["client_secret"]).encode()
+    signature = hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
+    return f"{payload}.{signature}"
+
+
+def valid_oauth_state(value):
+    try:
+        timestamp, nonce, signature = value.split(".", 2)
+        if abs(time.time() - int(timestamp)) > 900 or not nonce:
+            return False
+        secret = str(st.secrets["reteg_oauth"]["client_secret"]).encode()
+        expected = hmac.new(secret, f"{timestamp}.{nonce}".encode(), hashlib.sha256).hexdigest()
+        return hmac.compare_digest(signature, expected)
+    except (ValueError, KeyError, AttributeError, TypeError):
+        return False
+
+
+def oauth_flow(state=None):
+    flow = Flow.from_client_config(oauth_config(), scopes=OAUTH_SCOPES, state=state)
+    flow.redirect_uri = RETEG_REDIRECT_URI
+    return flow
+
+
+def authorize_drive_callback():
+    # The OAuth redirect may open a new Streamlit session; validate a signed,
+    # short-lived state rather than relying on session_state across redirects.
+    code = st.query_params.get("code")
+    if not code:
+        return
+    state = st.query_params.get("state", "")
+    st.query_params.clear()
+    if not valid_oauth_state(state):
+        st.session_state["drive_auth_error"] = "Autorización caducada o no válida. Inténtalo de nuevo."
+        return
+    try:
+        flow = oauth_flow(state=state)
+        flow.fetch_token(code=code)
+        creds = flow.credentials
+        identity = build("oauth2", "v2", credentials=creds, cache_discovery=False)
+        email = identity.userinfo().get().execute().get("email", "").lower()
+        if email != RETEG_OWNER_EMAIL:
+            st.session_state["drive_auth_error"] = "Debes autorizar con la cuenta propietaria del Drive de RETEG."
+            return
+        st.session_state["drive_oauth_credentials"] = creds.to_json()
+        st.session_state.pop("drive_auth_error", None)
+    except Exception:
+        st.session_state["drive_auth_error"] = "No se pudo completar la autorización de Google. Vuelve a intentarlo."
+
+
+def drive_credentials():
+    raw = st.session_state.get("drive_oauth_credentials")
+    if not raw:
+        return None
+    import json
+    creds = UserCredentials.from_authorized_user_info(json.loads(raw), scopes=OAUTH_SCOPES)
+    if not creds.valid:
+        if creds.expired and creds.refresh_token:
+            try:
+                creds.refresh(Request())
+                st.session_state["drive_oauth_credentials"] = creds.to_json()
+            except Exception:
+                st.session_state.pop("drive_oauth_credentials", None)
+                return None
+        else:
+            return None
+    return creds
+
+
 def drive_service():
-    account = dict(st.secrets["gcp_service_account"])
-    if isinstance(account.get("private_key"), str):
-        account["private_key"] = account["private_key"].replace("\\n", "\n")
-    creds = Credentials.from_service_account_info(
-        account, scopes=["https://www.googleapis.com/auth/drive"]
-    )
+    creds = drive_credentials()
+    if creds is None:
+        raise PermissionError("Es necesario autorizar Google Drive.")
     return build("drive", "v3", credentials=creds, cache_discovery=False)
+
+
+def drive_authorization_ui():
+    if error := st.session_state.pop("drive_auth_error", None):
+        st.error(error)
+    if drive_credentials() is not None:
+        return True
+    try:
+        flow = oauth_flow()
+        url, _ = flow.authorization_url(
+            access_type="offline", prompt="consent", state=oauth_state(),
+            include_granted_scopes="false",
+        )
+        st.info("Autoriza tu cuenta de Google para ver y subir fotos y vídeos a RETEG.")
+        st.link_button("AUTORIZAR GOOGLE DRIVE", url)
+    except (KeyError, StreamlitSecretNotFoundError):
+        st.warning("Falta configurar [reteg_oauth] en los Secrets de Streamlit.")
+    return False
 
 
 def media_sheet():
@@ -74,6 +190,8 @@ def media_section(patient, number):
     st.markdown("**FOTOS Y VÍDEOS**")
     if not st.secrets.get("reteg_media_enabled", True):
         st.info("Subida de archivos pendiente de habilitar: requiere permisos de Drive y acceso restringido a la aplicación.")
+        return
+    if not drive_authorization_ui():
         return
     try:
         ws = media_sheet()
@@ -194,6 +312,7 @@ def media_section(patient, number):
 
 
 st.set_page_config(page_title="REGISTRO RETEG", layout="wide")
+authorize_drive_callback()
 st.title("REGISTRO RETEG")
 st.caption("Registro de tratamiento endoscópico de dehiscencias posquirúrgicas")
 
