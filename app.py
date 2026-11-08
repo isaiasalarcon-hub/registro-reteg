@@ -7,6 +7,7 @@ import time
 import hmac
 import hashlib
 import secrets
+import requests
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 from googleapiclient.errors import HttpError
@@ -83,9 +84,36 @@ def authorize_drive_callback():
         st.session_state["drive_auth_error"] = "Autorización caducada o no válida. Inténtalo de nuevo."
         return
     try:
-        flow = oauth_flow(state=state)
-        flow.fetch_token(code=code)
-        creds = flow.credentials
+        # Exchange the code directly: Google can return a different scope order
+        # or extra identity scopes, which oauthlib otherwise rejects.
+        config = st.secrets["reteg_oauth"]
+        response = requests.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "code": code,
+                "client_id": config["client_id"],
+                "client_secret": config["client_secret"],
+                "redirect_uri": RETEG_REDIRECT_URI,
+                "grant_type": "authorization_code",
+            },
+            timeout=25,
+        )
+        if not response.ok:
+            reason = response.json().get("error", "unknown")
+            st.session_state["drive_auth_error"] = (
+                f"Google no pudo validar el código de autorización ({reason}). "
+                "Vuelve a pulsar AUTORIZAR GOOGLE DRIVE."
+            )
+            return
+        tokens = response.json()
+        creds = UserCredentials(
+            token=tokens["access_token"],
+            refresh_token=tokens.get("refresh_token"),
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=config["client_id"],
+            client_secret=config["client_secret"],
+            scopes=OAUTH_SCOPES,
+        )
         identity = build("oauth2", "v2", credentials=creds, cache_discovery=False)
         email = identity.userinfo().get().execute().get("email", "").lower()
         if email != RETEG_OWNER_EMAIL:
@@ -93,8 +121,13 @@ def authorize_drive_callback():
             return
         st.session_state["drive_oauth_credentials"] = creds.to_json()
         st.session_state.pop("drive_auth_error", None)
-    except Exception:
-        st.session_state["drive_auth_error"] = "No se pudo completar la autorización de Google. Vuelve a intentarlo."
+    except requests.RequestException:
+        st.session_state["drive_auth_error"] = "No se pudo conectar con Google para validar la autorización."
+    except Exception as exc:
+        st.session_state["drive_auth_error"] = (
+            f"Error al completar la autorización ({type(exc).__name__}). "
+            "Vuelve a intentarlo."
+        )
 
 
 def drive_credentials():
