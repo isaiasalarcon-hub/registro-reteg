@@ -79,8 +79,13 @@ def authorize_drive_callback():
     if not code:
         return
     state = st.query_params.get("state", "")
-    st.query_params.clear()
+    # Do not clear query parameters before exchanging the single-use code:
+    # changing query params can trigger a Streamlit rerun and consume it twice.
+    if st.session_state.get("oauth_processing_code") == code:
+        return
+    st.session_state["oauth_processing_code"] = code
     if not valid_oauth_state(state):
+        st.query_params.clear()
         st.session_state["drive_auth_error"] = "Autorización caducada o no válida. Inténtalo de nuevo."
         return
     try:
@@ -128,6 +133,9 @@ def authorize_drive_callback():
             f"Error al completar la autorización ({type(exc).__name__}). "
             "Vuelve a intentarlo."
         )
+    finally:
+        # Clear the one-use authorization code only after the exchange completes.
+        st.query_params.clear()
 
 
 def drive_credentials():
