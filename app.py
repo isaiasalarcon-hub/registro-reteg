@@ -57,7 +57,7 @@ def retry_connection():
 
 SURGERIES = ["Sleeve", "Bypass gástrico", "SASI", "Funduplicatura / hiato",
              "Esofaguectomía", "Gastrectomía", "Otra"]
-DIGESTIVOS = ["GARCIA", "MARTIN", "MARTINEZ", "DE LA SANTA", "BELDA", "OTRO"]
+DIGESTIVOS = ["GARCIA", "MARTIN", "MARTINEZ", "DE LA SANTA", "BELDA", "MORENO", "OTRO"]
 PLACES = ["Sala RX", "Sala convencional", "Quirófano urgencias", "UCI", "OTRO"]
 THERAPIES = ["ESPONJA", "VAC STENT", "STENT", "FIN TRATAMIENTO"]
 HEADERS = ["ID", "Cirugía", "Fecha cirugía", "N.º endoscopia", "Fecha endoscopia",
