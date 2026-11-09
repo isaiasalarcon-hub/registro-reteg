@@ -235,7 +235,6 @@ def deletion_controls(patient_id, number=None):
             try:
                 total = delete_reteg_records(patient_id, number)
                 st.session_state.pop(key, None)
-                st.session_state.pop(key + ":confirm", None)
                 st.session_state.pop("edit_endoscopy", None)
                 st.session_state["endoscopy_notice"] = (
                     f"Eliminación confirmada: {total} endoscopia(s) eliminada(s) del Google Sheets."
@@ -253,7 +252,6 @@ def deletion_controls(patient_id, number=None):
     with c2:
         if st.button("CANCELAR", key=key + ":no"):
             st.session_state.pop(key, None)
-            st.session_state.pop(key + ":confirm", None)
             st.rerun()
 
 
