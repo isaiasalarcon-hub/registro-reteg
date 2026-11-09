@@ -165,6 +165,98 @@ def parse_record_date(value):
         return None
 
 
+def delete_reteg_records(patient_id, number=None):
+    """Delete records from Google Sheets, which is RETEG's source of truth.
+
+    Individual deletion is limited to the latest endoscopy so numbering stays
+    consecutive. A patient deletion removes all their rows from both sheets.
+    """
+    patient_id = str(patient_id).strip()
+    if not patient_id:
+        raise ValueError("ID de paciente no válido.")
+    book = spreadsheet()
+    ws = book.worksheet("ENDOSCOPIAS")
+    values = ws.get_all_values()
+    matches = [(idx, row) for idx, row in enumerate(values[1:], start=2)
+               if row and str(row[0]).strip() == patient_id]
+    if not matches:
+        raise ValueError("No se han encontrado endoscopias para ese ID.")
+    if number is not None:
+        number = str(number)
+        last = max(int(row[3]) for _, row in matches)
+        if int(number) != last:
+            raise ValueError(
+                "Por seguridad, elimina primero las endoscopias más recientes. "
+                "Así se mantiene la numeración consecutiva."
+            )
+        matches = [(idx, row) for idx, row in matches if len(row) > 3 and row[3].strip() == number]
+        if len(matches) != 1:
+            raise ValueError("No se ha identificado una única endoscopia; no se ha borrado nada.")
+    else:
+        # Remove any matching patient-level rows as well.
+        try:
+            initial_ws = book.worksheet("REGISTRO INICIAL")
+        except gspread.WorksheetNotFound:
+            initial_ws = None
+        if initial_ws is not None:
+            initial_rows = initial_ws.get_all_values()
+            if initial_rows:
+                headers = [h.strip().upper() for h in initial_rows[0]]
+                id_col = headers.index("ID") if "ID" in headers else None
+                if id_col is not None:
+                    for idx in range(len(initial_rows), 1, -1):
+                        row = initial_rows[idx - 1]
+                        if len(row) > id_col and str(row[id_col]).strip() == patient_id:
+                            initial_ws.delete_rows(idx)
+    for idx, _ in sorted(matches, key=lambda item: item[0], reverse=True):
+        # Delete from bottom to top to avoid shifting row indexes.
+        ws.delete_rows(idx)
+    return len(matches)
+
+
+def deletion_controls(patient_id, number=None):
+    """Require an explicit confirmation before deleting any saved record."""
+    scope = f"endo:{number}" if number is not None else "patient"
+    key = f"delete:{patient_id}:{scope}"
+    label = ("esta endoscopia" if number is not None else
+             "el paciente y todas sus endoscopias")
+    if not st.session_state.get(key, False):
+        if st.button("🗑️ ELIMINAR " + ("ENDOSCOPIA" if number is not None else "PACIENTE"),
+                     key=key + ":open"):
+            st.session_state[key] = True
+            st.rerun()
+        return
+    st.warning(f"Vas a eliminar {label} del ID {patient_id} de la app y del Google Sheets. Esta acción no se puede deshacer desde la aplicación.")
+    confirm = st.checkbox("Entiendo que se eliminarán los datos del Excel", key=key + ":confirm")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("CONFIRMAR ELIMINACIÓN", key=key + ":yes", type="primary",
+                     disabled=not confirm):
+            try:
+                total = delete_reteg_records(patient_id, number)
+                st.session_state.pop(key, None)
+                st.session_state.pop(key + ":confirm", None)
+                st.session_state.pop("edit_endoscopy", None)
+                st.session_state["endoscopy_notice"] = (
+                    f"Eliminación confirmada: {total} endoscopia(s) eliminada(s) del Google Sheets."
+                )
+                if number is None:
+                    clear_form()
+                    st.session_state["case_page"] = False
+                    st.session_state["section"] = "Total"
+                else:
+                    st.session_state["endoscopy_form_open"] = False
+                    st.session_state["current_endoscopy"] = None
+                st.rerun()
+            except (ValueError, gspread.exceptions.APIError, gspread.WorksheetNotFound) as exc:
+                st.error(f"No se ha completado la eliminación: {type(exc).__name__}. Revisa el registro antes de volver a intentarlo.")
+    with c2:
+        if st.button("CANCELAR", key=key + ":no"):
+            st.session_state.pop(key, None)
+            st.session_state.pop(key + ":confirm", None)
+            st.rerun()
+
+
 def edit_existing_endoscopy(record):
     """Edit a saved endoscopy in place, retaining its patient ID and number."""
     patient = str(record["ID"]).strip()
@@ -269,6 +361,7 @@ def show_history(records, patient_id):
             elif st.button("✏️ EDITAR DATOS", key=f"start_edit:{edit_key}"):
                 st.session_state["edit_endoscopy"] = edit_key
                 st.rerun()
+            deletion_controls(patient_id, number)
 
 
 def latest_patient_records(records):
@@ -536,6 +629,8 @@ if st.session_state.get("case_page") and st.session_state.get("patient:id"):
         history_ws = endoscopy_sheet()
         saved_records = history_ws.get_all_records(numericise_ignore=["all"]) if history_ws else []
         show_history(saved_records, str(st.session_state["patient:id"]).strip())
+        with st.expander("Eliminar paciente completo", expanded=False):
+            deletion_controls(str(st.session_state["patient:id"]).strip())
         current_records = [r for r in saved_records if str(r.get("ID", "")).strip() == str(st.session_state["patient:id"]).strip()]
         last_record = max(current_records, key=lambda r: int(r["N.º endoscopia"])) if current_records else None
         if last_record and not is_finished(last_record) and not st.session_state.get("endoscopy_form_open", False):
