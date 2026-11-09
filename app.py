@@ -292,11 +292,13 @@ def media_section(patient, number):
                         with st.spinner("Cargando archivo desde Drive..."):
                             data = drive_file_bytes(file_id)
                         if is_video:
-                            st.video(data, format=mime if mime.startswith("video/") else "video/mp4")
+                            st.video(data, format=mime if mime.startswith("video/") else "video/mp4", width=260)
                         elif ext == "heic":
                             st.info("Este formato de imagen puede no ser compatible con el visor.")
                         else:
-                            st.image(data, caption=filename, use_container_width=True)
+                            st.image(data, caption=filename, width=160)
+                            if st.toggle("Ver imagen grande", key=f"large:{patient}:{number}:{file_id}"):
+                                st.image(data, caption=filename, use_container_width=True)
                     except Exception:
                         st.warning("No se ha podido mostrar este archivo. Comprueba los permisos de Drive.")
                 st.link_button(
@@ -627,31 +629,25 @@ def show_history(records, patient_id):
         st.write(f"**ID:** {patient_id}")
         st.write(f"**Cirugía:** {first.get('Cirugía', '')}")
         st.write(f"**Fecha cirugía:** {first.get('Fecha cirugía', '')}")
-    options = list(range(len(history)))
-    chosen = st.selectbox(
-        "Seleccionar endoscopia",
-        options,
-        format_func=lambda i: (
-            f"{'ENDOSCOPIA INICIAL' if int(history[i]['N.º endoscopia']) == 1 else str(history[i]['N.º endoscopia']) + 'ª ENDOSCOPIA'} · "
-            f"{history[i].get('Fecha endoscopia', '')} · "
-            f"{history[i].get('Tratamiento', '')}"
-        ),
-        key=f"history:{patient_id}",
-    )
-    record = history[chosen]
-    with st.container(border=True):
-        for field in HEADERS[4:]:
-            st.write(f"**{field}:** {record.get(field, '') or '—'}")
-    if st.session_state.get("edit_endoscopy") == f"{patient_id}:{record['N.º endoscopia']}":
-        if st.button("CANCELAR EDICIÓN", key=f"cancel_edit:{patient_id}:{record['N.º endoscopia']}"):
-            st.session_state.pop("edit_endoscopy", None)
-            st.rerun()
-        edit_existing_endoscopy(record)
-    else:
-        if st.button("✏️ EDITAR DATOS", key=f"start_edit:{patient_id}:{record['N.º endoscopia']}"):
-            st.session_state["edit_endoscopy"] = f"{patient_id}:{record['N.º endoscopia']}"
-            st.rerun()
-    media_section(patient_id, record["N.º endoscopia"])
+    st.subheader("Endoscopias guardadas")
+    for record in history:
+        number = str(record["N.º endoscopia"])
+        label = ("ENDOSCOPIA INICIAL" if number == "1" else f"{number}ª ENDOSCOPIA")
+        label += f" · {record.get('Fecha endoscopia', '')} · {record.get('Tratamiento', '')}"
+        with st.expander(label, expanded=False):
+            for field in HEADERS[4:]:
+                st.write(f"**{field}:** {record.get(field, '') or '—'}")
+            edit_key = f"{patient_id}:{number}"
+            if st.session_state.get("edit_endoscopy") == edit_key:
+                if st.button("CANCELAR EDICIÓN", key=f"cancel_edit:{edit_key}"):
+                    st.session_state.pop("edit_endoscopy", None)
+                    st.rerun()
+                edit_existing_endoscopy(record)
+            elif st.button("✏️ EDITAR DATOS", key=f"start_edit:{edit_key}"):
+                st.session_state["edit_endoscopy"] = edit_key
+                st.rerun()
+            if st.toggle("Ver archivos adjuntos", key=f"show_files:{edit_key}"):
+                media_section(patient_id, number)
 
 
 def latest_patient_records(records):
@@ -670,7 +666,7 @@ def latest_patient_records(records):
 
 def clear_form():
     for key in list(st.session_state):
-        if key.startswith(("patient:", "endo:")) or key in ("active_patient", "current_endoscopy", "reteg_missing_fields"):
+        if key.startswith(("patient:", "endo:")) or key in ("active_patient", "current_endoscopy", "reteg_missing_fields", "endoscopy_form_open"):
             del st.session_state[key]
     st.session_state["table_version"] = st.session_state.get("table_version", 0) + 1
 
@@ -696,6 +692,7 @@ def load_case(record):
     st.session_state["active_patient"] = patient
     st.session_state["current_endoscopy"] = None
     st.session_state["case_page"] = True
+    st.session_state["endoscopy_form_open"] = False
 
 def back_to_list():
     st.session_state["case_page"] = False
@@ -890,14 +887,6 @@ if section == "Nuevo caso" or not st.session_state.get("patient:id"):
 else:
     st.title(f"ID {st.session_state['patient:id']}")
 
-if st.session_state.get("case_page") and st.session_state.get("case_source") == "Total":
-    try:
-        history_ws = endoscopy_sheet()
-        show_history(history_ws.get_all_records(numericise_ignore=["all"]) if history_ws else [],
-                     st.session_state["patient:id"])
-    except Exception as exc:
-        st.error(connection_error(exc))
-
 if section == "Nuevo caso" and not st.session_state.get("case_page"):
     # Authorize BEFORE entering a new patient's data. Google redirects away
     # from Streamlit and otherwise discards unsaved widget values.
@@ -928,6 +917,28 @@ else:
     if surgery == "Otra":
         surgery = st.session_state.get("patient:other_surgery", "")
     surgery_date = st.session_state.get("patient:surgery_date")
+
+# Show previously saved endoscopies as collapsed panels, independently
+# of whether the case was opened from PENDIENTES, TOTAL or just saved.
+if st.session_state.get("case_page") and st.session_state.get("patient:id"):
+    try:
+        history_ws = endoscopy_sheet()
+        saved_records = history_ws.get_all_records(numericise_ignore=["all"]) if history_ws else []
+        show_history(saved_records, str(st.session_state["patient:id"]).strip())
+        current_records = [r for r in saved_records if str(r.get("ID", "")).strip() == str(st.session_state["patient:id"]).strip()]
+        last_record = max(current_records, key=lambda r: int(r["N.º endoscopia"])) if current_records else None
+        if last_record and not is_finished(last_record) and not st.session_state.get("endoscopy_form_open", False):
+            if st.button("➕ CARGAR SIGUIENTE ENDOSCOPIA", type="primary", use_container_width=True):
+                st.session_state["endoscopy_form_open"] = True
+                st.rerun()
+        if last_record and is_finished(last_record):
+            st.success("Tratamiento finalizado. No hay una nueva endoscopia pendiente.")
+    except Exception as exc:
+        st.error(connection_error(exc))
+
+# After saving, remain on the closed history until explicitly loading the next form.
+if st.session_state.get("case_page") and not st.session_state.get("endoscopy_form_open", False):
+    st.stop()
 
 def next_endoscopy_number(rows, patient_id):
     numbers = []
@@ -1065,22 +1076,19 @@ if save_clicked:
             else:
                 if not matches:
                     ws.append_row(record, value_input_option="RAW")
-                # One save action: clear endoscopy fields and prepare the next
-                # form only when treatment is still ongoing.
+                # Close the saved endoscopy. Never open the next blank form automatically.
                 for key in list(st.session_state):
                     if key.startswith("endo:"):
                         del st.session_state[key]
+                st.session_state["case_page"] = True
+                st.session_state["endoscopy_form_open"] = False
+                st.session_state.current_endoscopy = None
                 if finished == "NO":
-                    updated_rows = ws.get_all_values()[1:]
-                    st.session_state.current_endoscopy = next_endoscopy_number(updated_rows, patient_key)
-                    st.session_state["case_page"] = True
                     st.session_state.endoscopy_notice = (
                         f"Endoscopia {endoscopy_number} guardada. "
-                        f"Preparada la endoscopia {st.session_state.current_endoscopy}."
+                        "Pulsa CARGAR SIGUIENTE ENDOSCOPIA cuando quieras continuar."
                     )
                 else:
-                    st.session_state.current_endoscopy = None
-                    st.session_state["case_page"] = False
                     st.session_state.endoscopy_notice = (
                         f"Endoscopia {endoscopy_number} guardada. Tratamiento finalizado."
                     )
