@@ -19,7 +19,7 @@ from datetime import date, datetime
 from google.auth.exceptions import RefreshError
 from streamlit.errors import StreamlitSecretNotFoundError
 
-DRIVE_ROOT_FOLDER = "16ICuMpO49ULwZfyZBNHTWt754A-y0hwd"
+DRIVE_ROOT_FOLDER = "1lm_Bzc8tYUysmhOROAUJVMMo2rdMnNcI"
 MEDIA_HEADERS = ["ID", "N.º endoscopia", "Archivo", "Tipo", "Drive ID", "Fecha subida"]
 
 
@@ -28,7 +28,7 @@ OAUTH_SCOPES = [
     "https://www.googleapis.com/auth/userinfo.email",
     "openid",
 ]
-RETEG_OWNER_EMAIL = "isaiasalarcon@gmail.com"
+RETEG_OWNER_EMAIL = "endoscopia.egb@gmail.com"
 RETEG_REDIRECT_URI = "https://registro-reteg-88lhepzn444rsz5vkystm9.streamlit.app/"
 
 
@@ -394,7 +394,7 @@ def spreadsheet():
         account,
         scopes=["https://www.googleapis.com/auth/spreadsheets"],
     )
-    return gspread.authorize(credentials).open_by_key(st.secrets["spreadsheet_id"])
+    return gspread.authorize(credentials).open_by_key("1oBBqc0Z1uDEB80IjWC8aL1WF23ktnD6Tmk4nmyGVeGA")
 
 
 def connection_error(exc):
