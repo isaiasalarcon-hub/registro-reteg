@@ -478,6 +478,52 @@ def validate_record(patient_id, surgery, surgery_date, endoscopy_date, digestivo
     return None
 
 
+def missing_field_labels(patient_id, surgery, surgery_date, endoscopy_date, digestivo,
+                         place, therapy, review, pending_date=False, finished="NO",
+                         observations=""):
+    """Return the labels that must be corrected before saving."""
+    missing = []
+    if not str(patient_id or "").strip():
+        missing.append("ID")
+    if not str(surgery or "").strip():
+        missing.append("Cirugía")
+        missing.append("Especificar cirugía")
+    if surgery_date is None:
+        missing.append("Fecha cirugía")
+    if endoscopy_date is None or (surgery_date and endoscopy_date and endoscopy_date < surgery_date):
+        missing.append("Fecha de endoscopia")
+        missing.append("Fecha endoscopia")
+    if not str(digestivo or "").strip():
+        missing.extend(["Digestivo", "Especificar otro digestivo", "Especificar digestivo"])
+    if not str(place or "").strip():
+        missing.extend(["Lugar", "Especificar otro lugar", "Especificar lugar"])
+    if not str(therapy or "").strip():
+        missing.append("Tratamiento")
+    if not str(observations or "").strip():
+        missing.append("OBSERVACIONES")
+    if finished != "SI" and therapy != "FIN TRATAMIENTO" and not pending_date:
+        if review is None or (endoscopy_date and review < endoscopy_date):
+            missing.append("Fecha estimada siguiente recambio")
+    return list(dict.fromkeys(missing))
+
+
+def highlight_missing_fields(labels):
+    """Highlight only invalid Streamlit fields, including their labels."""
+    import html
+    if not labels:
+        return
+    rules = []
+    for label in labels:
+        safe = label.replace("\\", "\\\\").replace('"', '\\"')
+        for kind in ("stTextInput", "stDateInput", "stSelectbox", "stTextArea"):
+            selector = f'div[data-testid="{kind}"]:has([aria-label="{safe}"])'
+            rules.append(f'{selector} label {{ color: #c62828 !important; font-weight: 700 !important; }}')
+            rules.append(f'{selector} [data-baseweb="input"], {selector} [data-baseweb="select"], {selector} textarea {{ border: 2px solid #d32f2f !important; border-radius: 6px !important; }}')
+    st.markdown("<style>" + "\n".join(rules) + "</style>", unsafe_allow_html=True)
+    st.error("Hay campos obligatorios sin completar o con fechas no válidas. Revisa los campos resaltados en rojo.")
+    st.caption("Revisar: " + ", ".join(dict.fromkeys(labels)))
+
+
 def is_finished(record):
     value = str(record.get("Fin de tratamiento", "")).strip().upper()
     if value in ("SI", "SÍ"):
@@ -538,6 +584,10 @@ def edit_existing_endoscopy(record):
                             place, therapy, review, pending_date=pending_date,
                             finished=finished, observations=observations)
     if error:
+        highlight_missing_fields(missing_field_labels(
+            patient, surgery, surgery_date, endoscopy_date, digestivo, place,
+            therapy, review, pending_date=pending_date, finished=finished,
+            observations=observations))
         st.error(error)
         return
     try:
@@ -620,7 +670,7 @@ def latest_patient_records(records):
 
 def clear_form():
     for key in list(st.session_state):
-        if key.startswith(("patient:", "endo:")) or key in ("active_patient", "current_endoscopy"):
+        if key.startswith(("patient:", "endo:")) or key in ("active_patient", "current_endoscopy", "reteg_missing_fields"):
             del st.session_state[key]
     st.session_state["table_version"] = st.session_state.get("table_version", 0) + 1
 
@@ -923,6 +973,9 @@ if st.session_state.get("case_page") and endoscopy_number and endoscopy_number >
         st.warning(connection_error(exc))
 field_key = f"endo:{patient_key}:{endoscopy_number}:"
 
+if st.session_state.get("reteg_missing_fields"):
+    highlight_missing_fields(st.session_state["reteg_missing_fields"])
+
 with st.container(border=True):
     st.subheader("ENDOSCOPIA INICIAL" if endoscopy_number == 1 else f"{endoscopy_number}ª ENDOSCOPIA" if endoscopy_number else "Endoscopia actual")
     c1, c2 = st.columns(2)
@@ -984,8 +1037,14 @@ if save_clicked:
                             pending_date=pending_date and finished == "NO", finished=finished,
                             observations=observations)
     if error:
-        st.error(error)
+        st.session_state["reteg_missing_fields"] = missing_field_labels(
+            patient_id, surgery, surgery_date, endoscopy_date, digestivo, place,
+            therapy, review if finished == "NO" else None,
+            pending_date=pending_date and finished == "NO", finished=finished,
+            observations=observations)
+        st.rerun()
     else:
+        st.session_state.pop("reteg_missing_fields", None)
         try:
             ws = endoscopy_sheet(create=True)
             rows = ws.get_all_values()[1:]
